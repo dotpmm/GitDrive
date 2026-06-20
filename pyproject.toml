@@ -9,4 +9,5 @@ dependencies = [
     "httpx>=0.27",
     "python-multipart>=0.0.12",
     "python-dotenv>=1.0",
+    "pymongo>=4.10",
 ]
