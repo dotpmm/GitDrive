@@ -15,6 +15,11 @@ app = FastAPI(title="GDrive", version="1.1.0")
 _github = GitHubClient(token=os.environ["GITHUB_TOKEN"])
 
 
+@app.get("/")
+async def root() -> dict:
+    return {"status": "ok"}
+
+
 @app.post("/repo/create")
 async def create_repo(name: str) -> dict:
     try:
