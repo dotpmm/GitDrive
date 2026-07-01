@@ -1,7 +1,5 @@
 import os
 from datetime import datetime, timezone
-
-from bson import ObjectId
 from pymongo import MongoClient, DESCENDING
 from pymongo.collection import Collection
 
@@ -17,20 +15,25 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 def upsert_file(
+    *, 
     filename: str,
     repo: str,
     mime_type: str,
     size_bytes: int,
-    github_sha: str,
+    github_sha: str | None,
+    is_chunked: bool = False,
+    chunks: list[dict] | None = None,
 ) -> dict:
-    now = datetime.now(timezone.utc)
     doc = {
         "filename": filename,
         "repo": repo,
         "mime_type": mime_type,
         "size_bytes": size_bytes,
         "github_sha": github_sha,
-        "uploaded_at": now,
+        "is_chunked": is_chunked,
+        "chunk_count": len(chunks) if chunks else 0,
+        "chunks": chunks or [],
+        "uploaded_at": datetime.now(timezone.utc),
     }
     result = files.find_one_and_update(
         {"repo": repo, "filename": filename},
