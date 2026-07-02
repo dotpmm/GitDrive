@@ -14,7 +14,7 @@ from github import GitHubClient
 
 load_dotenv()
 
-app = FastAPI(title="GDrive", version="2.1.0")
+app = FastAPI(title="refactored-carnival", version="2.1.0")
 
 _github = GitHubClient(token=os.environ["GITHUB_TOKEN"])
 
