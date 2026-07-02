@@ -151,29 +151,17 @@
       height: 100%; width: 0%;
       border-radius: 99px;
       background: linear-gradient(90deg, var(--violet), var(--violet-l));
-      transition: width .25s ease;
+      transition: width .3s ease;
     }
     .bar-fill.ok  { background: linear-gradient(90deg, #059669, var(--ok)); }
     .bar-fill.err { background: var(--err); }
 
-    .phase-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; margin-bottom: 5px; }
-    .phase-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--text-3);
-      transition: background .25s, box-shadow .25s;
-      flex-shrink: 0;
+    .prog-meta {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-top: 8px;
     }
-    .phase-dot.ph-active {
-      background: var(--violet-l);
-      box-shadow: 0 0 6px rgba(167,139,250,.6);
-    }
-    .phase-dot.ph-done  { background: var(--ok); }
-    .phase-dot.ph-err   { background: var(--err); }
-    .phase-lbl { font-size: 12px; color: var(--text-2); flex: 1; }
-    .phase-pct { font-size: 11px; font-weight: 600; color: var(--text-3); font-family: 'JetBrains Mono', monospace; min-width: 52px; text-align: right; transition: color .2s; }
-    .phase-pct.active { color: var(--violet-l); }
-    .phase-pct.done   { color: var(--ok); }
-    .prog-speed { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--violet-l); }
+    .prog-chunk { font-size: 11px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; }
+    .prog-speed { font-size: 11px; color: var(--violet-l); font-family: 'JetBrains Mono', monospace; font-weight: 500; }
 
     .sec-head {
       display: flex; align-items: center; justify-content: space-between;
@@ -190,7 +178,7 @@
       width: 210px; outline: none;
       transition: border-color .2s;
     }
-    #searchBox:focus       { border-color: var(--violet); }
+    #searchBox:focus { border-color: var(--violet); }
     #searchBox::placeholder { color: var(--text-3); }
 
     .table-wrap {
@@ -213,8 +201,8 @@
     tbody tr:hover td { background: var(--surface-h); }
 
     .fname { font-weight: 500; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .fsha { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-3); letter-spacing: .2px; }
-    .fsz  { color: var(--text-2); white-space: nowrap; }
+    .fsha  { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-3); letter-spacing: .2px; }
+    .fsz   { color: var(--text-2); white-space: nowrap; }
 
     .badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 99px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
     .b-chunk  { background: rgba(124,58,237,.18); color: var(--violet-l); }
@@ -293,26 +281,15 @@
 
   <div id="uploadCard">
     <div class="prog-row">
-      <span class="prog-name" id="progName">—</span>
-      <span class="prog-speed" id="progSpeed"></span>
-    </div>
-
-    <div class="phase-row">
-      <span class="phase-dot" id="dot1"></span>
-      <span class="phase-lbl">Browser : Server</span>
-      <span class="phase-pct" id="pct1">—</span>
-    </div>
-    <div class="bar-track" style="margin-bottom:12px">
-      <div class="bar-fill" id="fill1"></div>
-    </div>
-
-    <div class="phase-row">
-      <span class="phase-dot" id="dot2"></span>
-      <span class="phase-lbl">Server : GitHub</span>
-      <span class="phase-pct" id="pct2">—</span>
+      <span class="prog-name"  id="progName">—</span>
+      <span class="prog-label" id="progLabel">Preparing…</span>
     </div>
     <div class="bar-track">
-      <div class="bar-fill" id="fill2"></div>
+      <div class="bar-fill" id="progFill"></div>
+    </div>
+    <div class="prog-meta">
+      <span class="prog-chunk" id="progChunk"></span>
+      <span class="prog-speed" id="progSpeed"></span>
     </div>
   </div>
 
@@ -339,6 +316,7 @@
 <div id="toasts"></div>
 
 <script>
+  const CHUNK_SIZE = 10 * 1024 * 1024;
 
   let allFiles = [];
 
@@ -349,16 +327,26 @@
     return (n / 1073741824).toFixed(2) + ' GB';
   }
 
+  function fmtSpeed(bps) {
+    if (bps < 1024)    return bps.toFixed(0) + ' B/s';
+    if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s';
+    return (bps / 1048576).toFixed(1) + ' MB/s';
+  }
+
   function esc(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   function toast(msg, type = 'inf', ms = 4500) {
-    const el = Object.assign(document.createElement('div'), { className: `toast ${type}`, textContent: msg });
+    const el = Object.assign(document.createElement('div'), {
+      className: `toast ${type}`,
+      textContent: msg,
+    });
     document.getElementById('toasts').append(el);
     setTimeout(() => el.remove(), ms);
   }
-
 
   function updateStats() {
     const total = allFiles.reduce((s, f) => s + (f.size_bytes || 0), 0);
@@ -386,21 +374,21 @@
       return;
     }
     body.innerHTML = list.map(f => {
-      const sha    = f.sha256;
-      const badge  = f.is_chunked
+      const sha     = f.sha256;
+      const badge   = f.is_chunked
         ? `<span class="badge b-chunk">${f.chunk_count}×</span>`
         : `<span class="badge b-single">1</span>`;
-      const szAttr  = f.size_bytes  || 0;
-      const mimeAttr = esc(f.mime_type || 'application/octet-stream');
+      const sz      = f.size_bytes  || 0;
+      const mime    = esc(f.mime_type || 'application/octet-stream');
       return `
         <tr id="fr-${sha}">
           <td><div class="fname" title="${esc(f.original_filename)}">${esc(f.original_filename)}</div></td>
-          <td class="fsz">${fmt(szAttr)}</td>
+          <td class="fsz">${fmt(sz)}</td>
           <td><span class="fsha">${sha.slice(0,10)}…${sha.slice(-4)}</span></td>
           <td>${badge}</td>
           <td>
             <button class="btn-dl" id="dlbtn-${sha}"
-              onclick="startDownload('${sha}','${esc(f.original_filename)}','${mimeAttr}',${szAttr})">
+              onclick="startDownload('${sha}','${esc(f.original_filename)}','${mime}',${sz})">
               ↓ Download
             </button>
           </td>
@@ -422,13 +410,6 @@
     ));
   });
 
-
-  function fmtSpeed(bps) {
-    if (bps < 1024)    return bps.toFixed(0) + ' B/s';
-    if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s';
-    return (bps / 1048576).toFixed(1) + ' MB/s';
-  }
-
   const dropZone  = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
 
@@ -438,132 +419,104 @@
   dropZone.addEventListener('drop', e => {
     e.preventDefault();
     dropZone.classList.remove('over');
-    if (e.dataTransfer.files.length) [...e.dataTransfer.files].forEach(upload);
+    [...e.dataTransfer.files].forEach(upload);
   });
-  fileInput.addEventListener('change', () => { [...fileInput.files].forEach(upload); fileInput.value = ''; });
+  fileInput.addEventListener('change', () => {
+    [...fileInput.files].forEach(upload);
+    fileInput.value = '';
+  });
 
-  function upload(file) {
+  async function upload(file) {
     const card  = document.getElementById('uploadCard');
+    const fill  = document.getElementById('progFill');
     const name  = document.getElementById('progName');
-    const spd   = document.getElementById('progSpeed');
-    const dot1  = document.getElementById('dot1');
-    const fill1 = document.getElementById('fill1');
-    const pct1  = document.getElementById('pct1');
-    const dot2  = document.getElementById('dot2');
-    const fill2 = document.getElementById('fill2');
-    const pct2  = document.getElementById('pct2');
+    const label = document.getElementById('progLabel');
+    const chunk = document.getElementById('progChunk');
+    const speed = document.getElementById('progSpeed');
 
     card.classList.add('visible');
-    name.textContent = file.name;
-    spd.textContent  = '';
+    fill.className    = 'bar-fill';
+    fill.style.width  = '0%';
+    name.textContent  = file.name;
+    label.textContent = 'Starting…';
+    chunk.textContent = '';
+    speed.textContent = '';
 
-    fill1.className = fill2.className = 'bar-fill';
-    fill1.style.width = fill2.style.width = '0%';
-    pct1.className = pct2.className = 'phase-pct active';
-    pct1.textContent = pct2.textContent = '0%';
-    dot1.className = 'phase-dot ph-active';
-    dot2.className = 'phase-dot';
+    const uploadId    = crypto.randomUUID();
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    const mime        = file.type || 'application/octet-stream';
+    const startTime   = Date.now();
+    let   bytesSent   = 0;
 
-    const xhr       = new XMLHttpRequest();
-    const startTime = Date.now();
-    let   ssePos    = 0;
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end   = Math.min(start + CHUNK_SIZE, file.size || 1);
+      const blob  = file.slice(start, end);
 
-    function parseSSE(text) {
-      let buf = text;
-      let boundary;
-      while ((boundary = buf.indexOf('\n\n')) !== -1) {
-        const block = buf.slice(0, boundary);
-        buf = buf.slice(boundary + 2);
-        for (const line of block.split('\n')) {
-          if (!line.startsWith('data: ')) continue;
-          let msg;
-          try { msg = JSON.parse(line.slice(6)); } catch { continue; }
+      label.textContent = totalChunks > 1 ? `Chunk ${i + 1} / ${totalChunks}` : 'Uploading…';
+      chunk.textContent = totalChunks > 1 ? `${i + 1} of ${totalChunks}` : '';
 
-          if (msg.status === 'uploading') {
-            dot2.className    = 'phase-dot ph-active';
-            fill2.style.width = msg.percent + '%';
-            pct2.textContent  = msg.percent + '%';
+      const fd = new FormData();
+      fd.append('chunk',        blob, file.name);
+      fd.append('upload_id',    uploadId);
+      fd.append('chunk_index',  i);
+      fd.append('total_chunks', totalChunks);
+      fd.append('filename',     file.name);
+      fd.append('mime_type',    mime);
+      fd.append('size_bytes',   file.size || 0);
 
-          } else if (msg.status === 'done') {
-            fill2.style.width = '100%';
-            fill2.className   = 'bar-fill ok';
-            pct2.className    = 'phase-pct done';
-            pct2.textContent  = '100%';
-            dot2.className    = 'phase-dot ph-done';
-            spd.textContent   = '';
-            toast(`${file.name} uploaded`, 'ok');
-            loadFiles();
-            setTimeout(() => card.classList.remove('visible'), 2500);
+      let res, data;
+      try {
+        res  = await fetch('/upload', { method: 'POST', body: fd });
+        data = await res.json();
+      } catch (e) {
+        fill.className    = 'bar-fill err';
+        fill.style.width  = '100%';
+        label.textContent = 'Network error';
+        chunk.textContent = '';
+        speed.textContent = '';
+        toast('Upload failed: ' + e.message, 'err');
+        return;
+      }
 
-          } else if (msg.status === 'duplicate') {
-            fill1.className = fill2.className = 'bar-fill ok';
-            fill2.style.width = '100%';
-            pct2.className    = 'phase-pct done';
-            pct2.textContent  = 'stored';
-            dot2.className    = 'phase-dot ph-done';
-            spd.textContent   = '';
-            toast(`${file.name} already exists`, 'inf');
-            loadFiles();
-            setTimeout(() => card.classList.remove('visible'), 2500);
+      if (!res.ok) {
+        fill.className    = 'bar-fill err';
+        fill.style.width  = '100%';
+        label.textContent = 'Error';
+        chunk.textContent = '';
+        speed.textContent = '';
+        toast('Upload error: ' + (data.detail || res.statusText), 'err');
+        return;
+      }
 
-          } else if (msg.status === 'error') {
-            fill1.className = fill2.className = 'bar-fill err';
-            dot2.className    = 'phase-dot ph-err';
-            pct2.className    = 'phase-pct';
-            pct2.textContent  = 'failed';
-            spd.textContent   = '';
-            toast('Upload error: ' + msg.error, 'err');
-          }
-        }
+      bytesSent        += (end - start);
+      const elapsed     = Math.max(0.01, (Date.now() - startTime) / 1000);
+      fill.style.width  = data.percent + '%';
+      speed.textContent = fmtSpeed(bytesSent / elapsed);
+
+      if (data.status === 'done') {
+        fill.className    = 'bar-fill ok';
+        label.textContent = 'Done ✓';
+        chunk.textContent = '';
+        speed.textContent = '';
+        toast(`${file.name} uploaded`, 'ok');
+        loadFiles();
+        setTimeout(() => card.classList.remove('visible'), 2200);
+        return;
+      }
+
+      if (data.status === 'duplicate') {
+        fill.className    = 'bar-fill ok';
+        fill.style.width  = '100%';
+        label.textContent = 'Already stored';
+        chunk.textContent = '';
+        speed.textContent = '';
+        toast(`${file.name} already exists`, 'inf');
+        loadFiles();
+        setTimeout(() => card.classList.remove('visible'), 2200);
+        return;
       }
     }
-
-    xhr.upload.onprogress = (e) => {
-      if (!e.lengthComputable) return;
-      const pct     = Math.min(100, e.loaded / e.total * 100).toFixed(1);
-      const elapsed = Math.max(0.01, (Date.now() - startTime) / 1000);
-      fill1.style.width = pct + '%';
-      pct1.textContent  = pct + '%';
-      spd.textContent   = fmtSpeed(e.loaded / elapsed);
-    };
-
-    xhr.upload.onload = () => {
-      fill1.style.width = '100%';
-      fill1.className   = 'bar-fill ok';
-      pct1.className    = 'phase-pct done';
-      pct1.textContent  = '100%';
-      dot1.className    = 'phase-dot ph-done';
-      dot2.className    = 'phase-dot ph-active';
-      pct2.textContent  = 'working…';
-      spd.textContent   = '';
-    };
-
-    xhr.onprogress = () => {
-      const newBit = xhr.responseText.slice(ssePos);
-      ssePos = xhr.responseText.length;
-      if (newBit) parseSSE(newBit);
-    };
-
-    xhr.onreadystatechange = () => {
-      if (xhr.readyState !== XMLHttpRequest.DONE) return;
-      const remaining = xhr.responseText.slice(ssePos);
-      if (remaining) parseSSE(remaining);
-    };
-
-    xhr.onerror = () => {
-      fill1.className   = 'bar-fill err';
-      fill1.style.width = '100%';
-      dot1.className    = 'phase-dot ph-err';
-      pct1.className    = 'phase-pct';
-      pct1.textContent  = 'failed';
-      spd.textContent   = '';
-      toast('Upload failed — network error', 'err');
-    };
-
-    const fd = new FormData();
-    fd.append('file', file);
-    xhr.open('POST', '/upload');
-    xhr.send(fd);
   }
 
   async function startDownload(sha256, filename, mimeType, sizeBytes) {
@@ -603,10 +556,8 @@
       let chunk;
       try { chunk = await reader.read(); } catch { break; }
       if (chunk.done) break;
-
       parts.push(chunk.value);
       received += chunk.value.length;
-
       if (sizeBytes > 0) {
         bar.style.width = Math.min(100, Math.round(received / sizeBytes * 100)) + '%';
       }
