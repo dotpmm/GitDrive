@@ -20,50 +20,36 @@ class GitHubClient:
                 json={"name": name, "private": True, "auto_init": True},
             )
         if r.status_code == 422:
-            return self.get_repo(name)
+            return 
         return r.json()
 
-    def get_repo(self, name: str) -> dict:
-        with httpx.Client() as client:
-            r = client.get(f"{BASE}/repos/{OWNER}/{name}", headers=self._headers)
-        return r.json()
-
-    def upload_file(self, repo: str, filename: str, content: bytes) -> dict:
+    def upload_file(self, repo: str, path: str, content: bytes) -> dict:
         encoded = base64.b64encode(content).decode()
         sha: str | None = None
 
         with httpx.Client() as client:
             existing = client.get(
-                f"{BASE}/repos/{OWNER}/{repo}/contents/{filename}",
+                f"{BASE}/repos/{OWNER}/{repo}/contents/{path}",
                 headers=self._headers,
             )
             if existing.status_code == 200:
                 sha = existing.json()["sha"]
 
-            payload: dict = {"message": f"upload: {filename}", "content": encoded}
+            payload: dict = {"message": f"{path}", "content": encoded}
             if sha:
                 payload["sha"] = sha
 
             r = client.put(
-                f"{BASE}/repos/{OWNER}/{repo}/contents/{filename}",
+                f"{BASE}/repos/{OWNER}/{repo}/contents/{path}",
                 headers=self._headers,
                 json=payload,
             )
         return r.json()
 
-    def download_file(self, repo: str, filename: str) -> bytes:
+    def download_file(self, repo: str, path: str) -> bytes:
         with httpx.Client() as client:
             r = client.get(
-                f"{BASE}/repos/{OWNER}/{repo}/contents/{filename}",
+                f"{BASE}/repos/{OWNER}/{repo}/contents/{path}",
                 headers={**self._headers, "Accept": "application/vnd.github.raw+json"},
             )
         return r.content
-
-    def list_files(self, repo: str) -> list[dict]:
-        with httpx.Client() as client:
-            r = client.get(
-                f"{BASE}/repos/{OWNER}/{repo}/contents/",
-                headers=self._headers,
-            )
-        data = r.json()
-        return data if isinstance(data, list) else [data]
