@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="refactored-carnival">
+  <title>refactored-carnival</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #07070f;
+      --surface:   rgba(255,255,255,0.035);
+      --surface-h: rgba(255,255,255,0.065);
+      --border:    rgba(255,255,255,0.07);
+      --border-s:  rgba(255,255,255,0.14);
+      --violet:    #7c3aed;
+      --violet-l:  #a78bfa;
+      --indigo:    #4f46e5;
+      --text:      #f1f5f9;
+      --text-2:    #94a3b8;
+      --text-3:    #475569;
+      --ok:        #10b981;
+      --err:       #ef4444;
+      --r:         12px;
+      --r-s:       8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse 70% 50% at 5% 0%,   rgba(124,58,237,.13) 0%, transparent 55%),
+        radial-gradient(ellipse 50% 40% at 95% 100%, rgba(79,70,229,.08)  0%, transparent 55%);
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 32px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(7,7,15,.85);
+      backdrop-filter: blur(14px);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: -.4px;
+    }
+
+    .logo-mark {
+      width: 30px; height: 30px;
+      background: linear-gradient(135deg, var(--violet), var(--indigo));
+      border-radius: 8px;
+      display: grid; place-items: center;
+      font-size: 14px;
+    }
+
+    .header-stats { display: flex; align-items: center; gap: 28px; }
+
+    .stat { text-align: right; }
+    .stat-val { font-size: 14px; font-weight: 600; color: var(--violet-l); }
+    .stat-lbl { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: .5px; }
+
+    .repo-pills { display: flex; gap: 6px; }
+    .repo-pill {
+      padding: 2px 9px; border-radius: 99px;
+      font-size: 10px; font-weight: 600;
+      background: rgba(124,58,237,.15);
+      border: 1px solid rgba(124,58,237,.3);
+      color: var(--violet-l);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    main { max-width: 920px; margin: 0 auto; padding: 44px 24px 80px; }
+
+    #dropZone {
+      border: 2px dashed var(--border-s);
+      border-radius: var(--r);
+      padding: 52px 32px;
+      text-align: center;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      background: var(--surface);
+      transition: border-color .2s, transform .15s;
+      margin-bottom: 28px;
+    }
+    #dropZone::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(124,58,237,.07), rgba(79,70,229,.07));
+      opacity: 0; transition: opacity .2s;
+    }
+    #dropZone:hover        { border-color: var(--violet); }
+    #dropZone:hover::after { opacity: 1; }
+    #dropZone.over         { border-color: var(--violet-l); transform: scale(1.004); }
+    #dropZone.over::after  { opacity: 1; }
+
+    .dz-icon {
+      width: 52px; height: 52px;
+      margin: 0 auto 18px;
+      background: rgba(124,58,237,.18);
+      border-radius: 14px;
+      display: grid; place-items: center;
+      font-size: 22px;
+      position: relative; z-index: 1;
+    }
+    .dz-title { font-size: 17px; font-weight: 600; margin-bottom: 6px; position: relative; z-index: 1; }
+    .dz-sub   { font-size: 13px; color: var(--text-2); position: relative; z-index: 1; }
+    #fileInput { display: none; }
+    #uploadCard {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 18px 22px;
+      margin-bottom: 28px;
+    }
+    #uploadCard.visible { display: block; }
+
+    .prog-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 10px;
+    }
+    .prog-name {
+      font-size: 13px; font-weight: 500;
+      max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .prog-label { font-size: 12px; color: var(--text-2); }
+
+    .bar-track {
+      height: 5px;
+      background: rgba(255,255,255,.07);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%; width: 0%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--violet), var(--violet-l));
+      transition: width .25s ease;
+    }
+    .bar-fill.ok  { background: linear-gradient(90deg, #059669, var(--ok)); }
+    .bar-fill.err { background: var(--err); }
+
+    .phase-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; margin-bottom: 5px; }
+    .phase-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--text-3);
+      transition: background .25s, box-shadow .25s;
+      flex-shrink: 0;
+    }
+    .phase-dot.ph-active {
+      background: var(--violet-l);
+      box-shadow: 0 0 6px rgba(167,139,250,.6);
+    }
+    .phase-dot.ph-done  { background: var(--ok); }
+    .phase-dot.ph-err   { background: var(--err); }
+    .phase-lbl { font-size: 12px; color: var(--text-2); flex: 1; }
+    .phase-pct { font-size: 11px; font-weight: 600; color: var(--text-3); font-family: 'JetBrains Mono', monospace; min-width: 52px; text-align: right; transition: color .2s; }
+    .phase-pct.active { color: var(--violet-l); }
+    .phase-pct.done   { color: var(--ok); }
+    .prog-speed { font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--violet-l); }
+
+    .sec-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .sec-title { font-size: 15px; font-weight: 600; }
+
+    #searchBox {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-s);
+      padding: 7px 13px;
+      color: var(--text); font-family: inherit; font-size: 13px;
+      width: 210px; outline: none;
+      transition: border-color .2s;
+    }
+    #searchBox:focus       { border-color: var(--violet); }
+    #searchBox::placeholder { color: var(--text-3); }
+
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    thead { background: rgba(255,255,255,.025); border-bottom: 1px solid var(--border); }
+    th {
+      padding: 11px 16px; text-align: left;
+      font-size: 10.5px; font-weight: 500;
+      text-transform: uppercase; letter-spacing: .5px;
+      color: var(--text-3);
+    }
+    td { padding: 13px 16px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,.035); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tbody tr { transition: background .12s; }
+    tbody tr:hover td { background: var(--surface-h); }
+
+    .fname { font-weight: 500; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fsha { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-3); letter-spacing: .2px; }
+    .fsz  { color: var(--text-2); white-space: nowrap; }
+
+    .badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 99px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+    .b-chunk  { background: rgba(124,58,237,.18); color: var(--violet-l); }
+    .b-single { background: rgba(79,70,229,.14);  color: #818cf8; }
+
+    .btn-dl {
+      background: transparent;
+      border: 1px solid var(--border-s);
+      color: var(--text-2);
+      padding: 5px 13px; border-radius: var(--r-s);
+      cursor: pointer; font-size: 12px; font-family: inherit; font-weight: 500;
+      transition: background .18s, border-color .18s, color .18s;
+      display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+    }
+    .btn-dl:hover:not(:disabled) { background: var(--violet); border-color: var(--violet); color: #fff; }
+    .btn-dl:disabled { opacity: .45; cursor: not-allowed; }
+
+    .dl-prog-row td { padding: 0 16px 10px; }
+    .dl-bar-track { height: 3px; background: rgba(255,255,255,.05); border-radius: 99px; overflow: hidden; }
+    .dl-bar-fill  { height: 100%; width: 0%; background: linear-gradient(90deg, var(--indigo), var(--violet-l)); border-radius: 99px; transition: width .2s ease; }
+
+    .empty { padding: 60px 24px; text-align: center; color: var(--text-3); font-size: 14px; }
+    .empty-icon { font-size: 32px; margin-bottom: 10px; opacity: .4; }
+
+    #toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 999; }
+    .toast {
+      background: rgba(10,10,20,.96);
+      border: 1px solid var(--border);
+      border-radius: var(--r-s);
+      padding: 11px 16px; font-size: 13px; max-width: 290px;
+      backdrop-filter: blur(14px);
+      animation: toastIn .18s ease;
+    }
+    .toast.ok  { border-left: 3px solid var(--ok);       }
+    .toast.err { border-left: 3px solid var(--err);      }
+    .toast.inf { border-left: 3px solid var(--violet-l); }
+    @keyframes toastIn { from { transform: translateX(16px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+    @media (max-width: 620px) {
+      header { padding: 14px 16px; }
+      .header-stats { display: none; }
+      main { padding: 28px 14px 60px; }
+      th:nth-child(3), td:nth-child(3),
+      th:nth-child(4), td:nth-child(4) { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-mark">⬡</div>
+    GDrive
+  </div>
+  <div class="header-stats">
+    <div class="stat">
+      <div class="stat-val" id="statFiles">—</div>
+      <div class="stat-lbl">Files</div>
+    </div>
+    <div class="stat">
+      <div class="stat-val" id="statSize">—</div>
+      <div class="stat-lbl">Stored</div>
+    </div>
+    <div class="repo-pills" id="repoPills"></div>
+  </div>
+</header>
+
+<main>
+
+  <div id="dropZone">
+    <input type="file" id="fileInput" multiple>
+    <div class="dz-icon">↑</div>
+    <div class="dz-title">Drop files here</div>
+    <div class="dz-sub">or click to browse ..any size, any format</div>
+  </div>
+
+  <div id="uploadCard">
+    <div class="prog-row">
+      <span class="prog-name" id="progName">—</span>
+      <span class="prog-speed" id="progSpeed"></span>
+    </div>
+
+    <div class="phase-row">
+      <span class="phase-dot" id="dot1"></span>
+      <span class="phase-lbl">Browser : Server</span>
+      <span class="phase-pct" id="pct1">—</span>
+    </div>
+    <div class="bar-track" style="margin-bottom:12px">
+      <div class="bar-fill" id="fill1"></div>
+    </div>
+
+    <div class="phase-row">
+      <span class="phase-dot" id="dot2"></span>
+      <span class="phase-lbl">Server : GitHub</span>
+      <span class="phase-pct" id="pct2">—</span>
+    </div>
+    <div class="bar-track">
+      <div class="bar-fill" id="fill2"></div>
+    </div>
+  </div>
+
+  <div class="sec-head">
+    <span class="sec-title">Files</span>
+    <input id="searchBox" type="search" placeholder="Search by name or hash">
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th><th>Size</th><th>SHA-256</th><th>Chunks</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="filesBody">
+        <tr><td colspan="5"><div class="empty"><div class="empty-icon">⋯</div>Loading…</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<div id="toasts"></div>
+
+<script>
+
+  let allFiles = [];
+
+  function fmt(n) {
+    if (n < 1024)       return n + ' B';
+    if (n < 1048576)    return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function toast(msg, type = 'inf', ms = 4500) {
+    const el = Object.assign(document.createElement('div'), { className: `toast ${type}`, textContent: msg });
+    document.getElementById('toasts').append(el);
+    setTimeout(() => el.remove(), ms);
+  }
+
+
+  function updateStats() {
+    const total = allFiles.reduce((s, f) => s + (f.size_bytes || 0), 0);
+    document.getElementById('statFiles').textContent = allFiles.length;
+    document.getElementById('statSize').textContent  = fmt(total);
+    const repos = [...new Set(allFiles.map(f => f.repo).filter(Boolean))];
+    document.getElementById('repoPills').innerHTML =
+      repos.map(r => `<span class="repo-pill">${esc(r)}</span>`).join('');
+  }
+
+  async function loadFiles() {
+    try {
+      allFiles = await fetch('/files').then(r => r.json());
+      renderFiles(allFiles);
+      updateStats();
+    } catch {
+      toast('Could not load file list', 'err');
+    }
+  }
+
+  function renderFiles(list) {
+    const body = document.getElementById('filesBody');
+    if (!list.length) {
+      body.innerHTML = `<tr><td colspan="5"><div class="empty"><div class="empty-icon">○</div>No files yet</div></td></tr>`;
+      return;
+    }
+    body.innerHTML = list.map(f => {
+      const sha    = f.sha256;
+      const badge  = f.is_chunked
+        ? `<span class="badge b-chunk">${f.chunk_count}×</span>`
+        : `<span class="badge b-single">1</span>`;
+      const szAttr  = f.size_bytes  || 0;
+      const mimeAttr = esc(f.mime_type || 'application/octet-stream');
+      return `
+        <tr id="fr-${sha}">
+          <td><div class="fname" title="${esc(f.original_filename)}">${esc(f.original_filename)}</div></td>
+          <td class="fsz">${fmt(szAttr)}</td>
+          <td><span class="fsha">${sha.slice(0,10)}…${sha.slice(-4)}</span></td>
+          <td>${badge}</td>
+          <td>
+            <button class="btn-dl" id="dlbtn-${sha}"
+              onclick="startDownload('${sha}','${esc(f.original_filename)}','${mimeAttr}',${szAttr})">
+              ↓ Download
+            </button>
+          </td>
+        </tr>
+        <tr class="dl-prog-row" id="dlrow-${sha}" style="display:none">
+          <td colspan="5">
+            <div class="dl-bar-track">
+              <div class="dl-bar-fill" id="dlbar-${sha}"></div>
+            </div>
+          </td>
+        </tr>`;
+    }).join('');
+  }
+
+  document.getElementById('searchBox').addEventListener('input', function () {
+    const q = this.value.toLowerCase();
+    renderFiles(allFiles.filter(f =>
+      f.original_filename.toLowerCase().includes(q) || f.sha256.includes(q)
+    ));
+  });
+
+
+  function fmtSpeed(bps) {
+    if (bps < 1024)    return bps.toFixed(0) + ' B/s';
+    if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s';
+    return (bps / 1048576).toFixed(1) + ' MB/s';
+  }
+
+  const dropZone  = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+
+  dropZone.addEventListener('click',     () => fileInput.click());
+  dropZone.addEventListener('dragover',  e  => { e.preventDefault(); dropZone.classList.add('over'); });
+  dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('over');
+    if (e.dataTransfer.files.length) [...e.dataTransfer.files].forEach(upload);
+  });
+  fileInput.addEventListener('change', () => { [...fileInput.files].forEach(upload); fileInput.value = ''; });
+
+  function upload(file) {
+    const card  = document.getElementById('uploadCard');
+    const name  = document.getElementById('progName');
+    const spd   = document.getElementById('progSpeed');
+    const dot1  = document.getElementById('dot1');
+    const fill1 = document.getElementById('fill1');
+    const pct1  = document.getElementById('pct1');
+    const dot2  = document.getElementById('dot2');
+    const fill2 = document.getElementById('fill2');
+    const pct2  = document.getElementById('pct2');
+
+    card.classList.add('visible');
+    name.textContent = file.name;
+    spd.textContent  = '';
+
+    fill1.className = fill2.className = 'bar-fill';
+    fill1.style.width = fill2.style.width = '0%';
+    pct1.className = pct2.className = 'phase-pct active';
+    pct1.textContent = pct2.textContent = '0%';
+    dot1.className = 'phase-dot ph-active';
+    dot2.className = 'phase-dot';
+
+    const xhr       = new XMLHttpRequest();
+    const startTime = Date.now();
+    let   ssePos    = 0;
+
+    function parseSSE(text) {
+      let buf = text;
+      let boundary;
+      while ((boundary = buf.indexOf('\n\n')) !== -1) {
+        const block = buf.slice(0, boundary);
+        buf = buf.slice(boundary + 2);
+        for (const line of block.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          let msg;
+          try { msg = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (msg.status === 'uploading') {
+            dot2.className    = 'phase-dot ph-active';
+            fill2.style.width = msg.percent + '%';
+            pct2.textContent  = msg.percent + '%';
+
+          } else if (msg.status === 'done') {
+            fill2.style.width = '100%';
+            fill2.className   = 'bar-fill ok';
+            pct2.className    = 'phase-pct done';
+            pct2.textContent  = '100%';
+            dot2.className    = 'phase-dot ph-done';
+            spd.textContent   = '';
+            toast(`${file.name} uploaded`, 'ok');
+            loadFiles();
+            setTimeout(() => card.classList.remove('visible'), 2500);
+
+          } else if (msg.status === 'duplicate') {
+            fill1.className = fill2.className = 'bar-fill ok';
+            fill2.style.width = '100%';
+            pct2.className    = 'phase-pct done';
+            pct2.textContent  = 'stored';
+            dot2.className    = 'phase-dot ph-done';
+            spd.textContent   = '';
+            toast(`${file.name} already exists`, 'inf');
+            loadFiles();
+            setTimeout(() => card.classList.remove('visible'), 2500);
+
+          } else if (msg.status === 'error') {
+            fill1.className = fill2.className = 'bar-fill err';
+            dot2.className    = 'phase-dot ph-err';
+            pct2.className    = 'phase-pct';
+            pct2.textContent  = 'failed';
+            spd.textContent   = '';
+            toast('Upload error: ' + msg.error, 'err');
+          }
+        }
+      }
+    }
+
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const pct     = Math.min(100, e.loaded / e.total * 100).toFixed(1);
+      const elapsed = Math.max(0.01, (Date.now() - startTime) / 1000);
+      fill1.style.width = pct + '%';
+      pct1.textContent  = pct + '%';
+      spd.textContent   = fmtSpeed(e.loaded / elapsed);
+    };
+
+    xhr.upload.onload = () => {
+      fill1.style.width = '100%';
+      fill1.className   = 'bar-fill ok';
+      pct1.className    = 'phase-pct done';
+      pct1.textContent  = '100%';
+      dot1.className    = 'phase-dot ph-done';
+      dot2.className    = 'phase-dot ph-active';
+      pct2.textContent  = 'working…';
+      spd.textContent   = '';
+    };
+
+    xhr.onprogress = () => {
+      const newBit = xhr.responseText.slice(ssePos);
+      ssePos = xhr.responseText.length;
+      if (newBit) parseSSE(newBit);
+    };
+
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== XMLHttpRequest.DONE) return;
+      const remaining = xhr.responseText.slice(ssePos);
+      if (remaining) parseSSE(remaining);
+    };
+
+    xhr.onerror = () => {
+      fill1.className   = 'bar-fill err';
+      fill1.style.width = '100%';
+      dot1.className    = 'phase-dot ph-err';
+      pct1.className    = 'phase-pct';
+      pct1.textContent  = 'failed';
+      spd.textContent   = '';
+      toast('Upload failed — network error', 'err');
+    };
+
+    const fd = new FormData();
+    fd.append('file', file);
+    xhr.open('POST', '/upload');
+    xhr.send(fd);
+  }
+
+  async function startDownload(sha256, filename, mimeType, sizeBytes) {
+    const btn = document.getElementById(`dlbtn-${sha256}`);
+    const row = document.getElementById(`dlrow-${sha256}`);
+    const bar = document.getElementById(`dlbar-${sha256}`);
+
+    btn.disabled      = true;
+    btn.textContent   = '…';
+    row.style.display = '';
+    bar.style.width   = '0%';
+
+    let res;
+    try {
+      res = await fetch(`/download/${sha256}`);
+    } catch (e) {
+      row.style.display = 'none';
+      btn.disabled      = false;
+      btn.textContent   = 'Download';
+      toast('Download failed: ' + e.message, 'err');
+      return;
+    }
+
+    if (!res.ok) {
+      row.style.display = 'none';
+      btn.disabled      = false;
+      btn.textContent   = 'Download';
+      toast(`Download error ${res.status}`, 'err');
+      return;
+    }
+
+    const reader   = res.body.getReader();
+    const parts    = [];
+    let   received = 0;
+
+    while (true) {
+      let chunk;
+      try { chunk = await reader.read(); } catch { break; }
+      if (chunk.done) break;
+
+      parts.push(chunk.value);
+      received += chunk.value.length;
+
+      if (sizeBytes > 0) {
+        bar.style.width = Math.min(100, Math.round(received / sizeBytes * 100)) + '%';
+      }
+    }
+
+    const blob = new Blob(parts, { type: mimeType });
+    const url  = URL.createObjectURL(blob);
+    Object.assign(document.createElement('a'), { href: url, download: filename }).click();
+    URL.revokeObjectURL(url);
+
+    row.style.display = 'none';
+    btn.disabled      = false;
+    btn.textContent   = 'Download';
+    toast(`${filename} saved`, 'ok');
+  }
+
+  loadFiles();
+</script>
+</body>
+</html>

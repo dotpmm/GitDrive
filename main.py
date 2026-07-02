@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 import db
@@ -14,7 +14,7 @@ from github import GitHubClient
 
 load_dotenv()
 
-app = FastAPI(title="GDrive", version="2.0.0")
+app = FastAPI(title="GDrive", version="2.1.0")
 
 _github = GitHubClient(token=os.environ["GITHUB_TOKEN"])
 
@@ -22,15 +22,18 @@ CHUNK_SIZE  = 10 * 1024 * 1024   # 10 MB, cuz, base64 encoding inflates a bit...
 MAX_RETRIES = 3
 RETRY_WAIT  = 1
 
-_sessions: dict[str, dict] = {}
-
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _object_path(sha: str) -> str:
-    return f"objects/{sha[:2]}/{sha[2:]}.chunk"
+def _object_path(sha: str, chunked: bool) -> str:
+    ext = ".chunk" if chunked else ".bin"
+    return f"objects/{sha[:2]}/{sha[2:]}{ext}"
+
+
+def _split(data: bytes) -> list[bytes]:
+    return [data[i : i + CHUNK_SIZE] for i in range(0, len(data), CHUNK_SIZE)]
 
 
 def _upload_with_retry(repo: str, path: str, content: bytes) -> dict:
@@ -45,84 +48,97 @@ def _upload_with_retry(repo: str, path: str, content: bytes) -> dict:
     raise last_exc
 
 
+def _sse(data: dict) -> str:
+    return f"data: {json.dumps(data)}\n\n"
+
+
+async def _upload_stream(content: bytes, original_filename: str, mime_type: str):
+    file_sha = _sha256(content)
+
+    existing = db.find_by_sha256(sha256=file_sha)
+    if existing:
+        yield _sse({"status": "duplicate", "sha256": file_sha})
+        return
+
+    repo, is_new = db.get_active_repo()
+    if is_new:
+        try:
+            await asyncio.to_thread(_github.create_repo, repo)
+        except Exception as exc:
+            yield _sse({"status": "error", "error": str(exc)})
+            return
+
+    if len(content) <= CHUNK_SIZE:
+        try:
+            await asyncio.to_thread(
+                _upload_with_retry, repo, _object_path(file_sha, False), content
+            )
+        except Exception as exc:
+            yield _sse({"status": "error", "error": str(exc)})
+            return
+
+        db.upsert_file(
+            sha256=file_sha,
+            original_filename=original_filename,
+            repo=repo,
+            mime_type=mime_type,
+            size_bytes=len(content),
+            is_chunked=False,
+        )
+        db.increment_repo_size(repo, len(content))
+        yield _sse({"status": "done", "sha256": file_sha})
+        return
+
+    raw_chunks = _split(content)
+    total = len(raw_chunks)
+    chunk_records: list[dict] = []
+
+    for i, chunk in enumerate(raw_chunks):
+        chunk_sha  = _sha256(chunk)
+        chunk_path = _object_path(chunk_sha, chunked=True)
+
+        try:
+            await asyncio.to_thread(_upload_with_retry, repo, chunk_path, chunk)
+        except Exception as exc:
+            yield _sse({"status": "error", "chunk": i + 1, "total_chunks": total, "error": str(exc)})
+            return
+
+        chunk_records.append({"index": i, "sha256": chunk_sha, "size": len(chunk)})
+        yield _sse({
+            "status":       "uploading",
+            "chunk":        i + 1,
+            "total_chunks": total,
+            "percent":      round((i + 1) / total * 100, 1),
+        })
+
+    db.upsert_file(
+        sha256=file_sha,
+        original_filename=original_filename,
+        repo=repo,
+        mime_type=mime_type,
+        size_bytes=len(content),
+        is_chunked=True,
+        chunks=chunk_records,
+    )
+    db.increment_repo_size(repo, len(content))
+    yield _sse({"status": "done", "sha256": file_sha, "total_chunks": total})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def root() -> HTMLResponse:
     return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
 
 
 @app.post("/upload")
-async def upload_chunk(
-    chunk:        UploadFile = File(...),
-    upload_id:    str        = Form(...),
-    chunk_index:  int        = Form(...),
-    total_chunks: int        = Form(...),
-    filename:     str        = Form(...),
-    mime_type:    str        = Form(""),
-    size_bytes:   int        = Form(...),
-) -> dict:
-    data      = await chunk.read()
-    chunk_sha = _sha256(data)
-    is_multi  = total_chunks > 1
-    path      = _object_path(chunk_sha)
-
-    if upload_id not in _sessions:
-        resolved_mime = mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        repo, is_new = db.get_active_repo()
-        if is_new:
-            try:
-                await asyncio.to_thread(_github.create_repo, repo)
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"Could not create repo: {exc}") from exc
-
-        _sessions[upload_id] = {
-            "hasher":     hashlib.sha256(),
-            "chunks":     [],
-            "filename":   filename,
-            "mime_type":  resolved_mime,
-            "size_bytes": size_bytes,
-            "repo":       repo,
-        }
-
-    sess = _sessions[upload_id]
-    repo = sess["repo"]
-
-    sess["hasher"].update(data)
-
-    try:
-        await asyncio.to_thread(_upload_with_retry, repo, path, data)
-    except Exception as exc:
-        _sessions.pop(upload_id, None)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    sess["chunks"].append({"index": chunk_index, "sha256": chunk_sha, "size": len(data)})
-    percent = round((chunk_index + 1) / total_chunks * 100, 1)
-
-    if chunk_index + 1 == total_chunks:
-        file_sha = sess["hasher"].hexdigest()
-
-        if db.find_by_sha256(sha256=file_sha):
-            _sessions.pop(upload_id, None)
-            return {"status": "duplicate", "sha256": file_sha, "percent": 100.0}
-
-        db.upsert_file(
-            sha256=file_sha,
-            original_filename=sess["filename"],
-            repo=repo,
-            mime_type=sess["mime_type"],
-            size_bytes=sess["size_bytes"],
-            is_chunked=is_multi,
-            chunks=sess["chunks"] if is_multi else [],
-        )
-        db.increment_repo_size(repo, sess["size_bytes"])
-        _sessions.pop(upload_id, None)
-        return {"status": "done", "sha256": file_sha, "percent": 100.0}
-
-    return {
-        "status":       "chunk_ok",
-        "chunk":        chunk_index + 1,
-        "total_chunks": total_chunks,
-        "percent":      percent,
-    }
+async def upload_file(file: UploadFile = File(...)) -> StreamingResponse:
+    content = await file.read()
+    original_filename = file.filename or "unnamed"
+    mime_type = mimetypes.guess_type(original_filename)[0] or "application/octet-stream"
+    return StreamingResponse(
+        _upload_stream(content, original_filename, mime_type),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/files")
@@ -147,13 +163,13 @@ async def download_file(file_sha256: str) -> Response | StreamingResponse:
         chunks = sorted(record["chunks"], key=lambda c: c["index"])
 
         def _iter_chunks():
-            for c in chunks:
-                yield _github.download_file(repo=repo, path=_object_path(c["sha256"]))
+            for chunk in chunks:
+                yield _github.download_file(repo=repo, path=_object_path(chunk["sha256"], chunked=True))
 
         return StreamingResponse(_iter_chunks(), media_type=record["mime_type"], headers=headers)
 
     try:
-        data = _github.download_file(repo=repo, path=_object_path(record["sha256"]))
+        data = _github.download_file(repo=repo, path=_object_path(record["sha256"], chunked=False))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
