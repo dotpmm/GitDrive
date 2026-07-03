@@ -69,11 +69,9 @@
     }
 
     .header-stats { display: flex; align-items: center; gap: 28px; }
-
     .stat { text-align: right; }
     .stat-val { font-size: 14px; font-weight: 600; color: var(--violet-l); }
     .stat-lbl { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: .5px; }
-
     .repo-pills { display: flex; gap: 6px; }
     .repo-pill {
       padding: 2px 9px; border-radius: 99px;
@@ -121,6 +119,7 @@
     .dz-title { font-size: 17px; font-weight: 600; margin-bottom: 6px; position: relative; z-index: 1; }
     .dz-sub   { font-size: 13px; color: var(--text-2); position: relative; z-index: 1; }
     #fileInput { display: none; }
+
     #uploadCard {
       display: none;
       background: var(--surface);
@@ -133,11 +132,11 @@
 
     .prog-row {
       display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     .prog-name {
       font-size: 13px; font-weight: 500;
-      max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .prog-label { font-size: 12px; color: var(--text-2); }
 
@@ -158,10 +157,30 @@
 
     .prog-meta {
       display: flex; justify-content: space-between; align-items: center;
-      margin-top: 8px;
+      margin-top: 6px;
     }
-    .prog-chunk { font-size: 11px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; }
-    .prog-speed { font-size: 11px; color: var(--violet-l); font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+    .prog-chunk { font-size: 10px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; }
+    .prog-speed { font-size: 10px; color: var(--violet-l); font-family: 'JetBrains Mono', monospace; font-weight: 500; }
+
+    .sync-row {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .sync-label-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 6px;
+    }
+    .sync-lbl { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: .5px; }
+    .sync-pct { font-size: 10px; font-family: 'JetBrains Mono', monospace; color: var(--indigo); }
+    .sync-track { height: 3px; background: rgba(255,255,255,.05); border-radius: 99px; overflow: hidden; }
+    .sync-fill  {
+      height: 100%; width: 0%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--indigo), var(--violet-l));
+      transition: width .4s ease;
+    }
+    .sync-fill.ok { background: linear-gradient(90deg, #059669, var(--ok)); }
 
     .sec-head {
       display: flex; align-items: center; justify-content: space-between;
@@ -276,7 +295,7 @@
     <input type="file" id="fileInput" multiple>
     <div class="dz-icon">↑</div>
     <div class="dz-title">Drop files here</div>
-    <div class="dz-sub">or click to browse ..any size, any format</div>
+    <div class="dz-sub">or click to browse ....any size, any format</div>
   </div>
 
   <div id="uploadCard">
@@ -290,6 +309,15 @@
     <div class="prog-meta">
       <span class="prog-chunk" id="progChunk"></span>
       <span class="prog-speed" id="progSpeed"></span>
+    </div>
+    <div class="sync-row" id="syncRow" style="display:none">
+      <div class="sync-label-row">
+        <span class="sync-lbl">GitHub sync</span>
+        <span class="sync-pct" id="syncPct">0%</span>
+      </div>
+      <div class="sync-track">
+        <div class="sync-fill" id="syncFill"></div>
+      </div>
     </div>
   </div>
 
@@ -317,7 +345,6 @@
 
 <script>
   const CHUNK_SIZE = 10 * 1024 * 1024;
-
   let allFiles = [];
 
   function fmt(n) {
@@ -335,13 +362,13 @@
 
   function esc(s) {
     return String(s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   function toast(msg, type = 'inf', ms = 4500) {
     const el = Object.assign(document.createElement('div'), {
-      className: `toast ${type}`,
+      className:   `toast ${type}`,
       textContent: msg,
     });
     document.getElementById('toasts').append(el);
@@ -359,7 +386,7 @@
 
   async function loadFiles() {
     try {
-      allFiles = await fetch('/files').then(r => r.json());
+      allFiles = await fetch(`/files?t=${Date.now()}`).then(r => r.json());
       renderFiles(allFiles);
       updateStats();
     } catch {
@@ -374,12 +401,12 @@
       return;
     }
     body.innerHTML = list.map(f => {
-      const sha     = f.sha256;
-      const badge   = f.is_chunked
+      const sha  = f.sha256;
+      const badge = f.is_chunked
         ? `<span class="badge b-chunk">${f.chunk_count}×</span>`
         : `<span class="badge b-single">1</span>`;
-      const sz      = f.size_bytes  || 0;
-      const mime    = esc(f.mime_type || 'application/octet-stream');
+      const sz   = f.size_bytes || 0;
+      const mime = esc(f.mime_type || 'application/octet-stream');
       return `
         <tr id="fr-${sha}">
           <td><div class="fname" title="${esc(f.original_filename)}">${esc(f.original_filename)}</div></td>
@@ -426,21 +453,35 @@
     fileInput.value = '';
   });
 
-  async function upload(file) {
-    const card  = document.getElementById('uploadCard');
-    const fill  = document.getElementById('progFill');
-    const name  = document.getElementById('progName');
-    const label = document.getElementById('progLabel');
-    const chunk = document.getElementById('progChunk');
-    const speed = document.getElementById('progSpeed');
-
-    card.classList.add('visible');
+  function resetCard() {
+    const fill     = document.getElementById('progFill');
+    const syncRow  = document.getElementById('syncRow');
+    const syncFill = document.getElementById('syncFill');
     fill.className    = 'bar-fill';
     fill.style.width  = '0%';
+    syncRow.style.display = 'none';
+    syncFill.className    = 'sync-fill';
+    syncFill.style.width  = '0%';
+    document.getElementById('progChunk').textContent = '';
+    document.getElementById('progSpeed').textContent = '';
+    document.getElementById('syncPct').textContent   = '0%';
+  }
+
+  async function upload(file) {
+    const card     = document.getElementById('uploadCard');
+    const fill     = document.getElementById('progFill');
+    const name     = document.getElementById('progName');
+    const label    = document.getElementById('progLabel');
+    const chunk    = document.getElementById('progChunk');
+    const speed    = document.getElementById('progSpeed');
+    const syncRow  = document.getElementById('syncRow');
+    const syncFill = document.getElementById('syncFill');
+    const syncPct  = document.getElementById('syncPct');
+
+    card.classList.add('visible');
+    resetCard();
     name.textContent  = file.name;
     label.textContent = 'Starting…';
-    chunk.textContent = '';
-    speed.textContent = '';
 
     const uploadId    = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
@@ -453,7 +494,9 @@
       const end   = Math.min(start + CHUNK_SIZE, file.size || 1);
       const blob  = file.slice(start, end);
 
-      label.textContent = totalChunks > 1 ? `Chunk ${i + 1} / ${totalChunks}` : 'Uploading…';
+      label.textContent = totalChunks > 1
+        ? `Sending chunk ${i + 1} / ${totalChunks}`
+        : 'Sending…';
       chunk.textContent = totalChunks > 1 ? `${i + 1} of ${totalChunks}` : '';
 
       const fd = new FormData();
@@ -491,11 +534,26 @@
 
       bytesSent        += (end - start);
       const elapsed     = Math.max(0.01, (Date.now() - startTime) / 1000);
-      fill.style.width  = data.percent + '%';
       speed.textContent = fmtSpeed(bytesSent / elapsed);
+
+      if (data.status === 'received') {
+        fill.style.width = data.percent + '%';
+        continue;
+      }
+
+      if (data.status === 'processing') {
+        fill.style.width  = '100%';
+        label.textContent = 'Syncing to GitHub…';
+        chunk.textContent = '';
+        speed.textContent = '';
+        syncRow.style.display = '';
+        await pollSync(uploadId, file, fill, label, syncFill, syncPct);
+        return;
+      }
 
       if (data.status === 'done') {
         fill.className    = 'bar-fill ok';
+        fill.style.width  = '100%';
         label.textContent = 'Done ✓';
         chunk.textContent = '';
         speed.textContent = '';
@@ -514,6 +572,67 @@
         toast(`${file.name} already exists`, 'inf');
         loadFiles();
         setTimeout(() => card.classList.remove('visible'), 2200);
+        return;
+      }
+    }
+  }
+
+  async function pollSync(uploadId, file, fill, label, syncFill, syncPct) {
+    const card = document.getElementById('uploadCard');
+    while (true) {
+      await new Promise(r => setTimeout(r, 1500));
+      let data;
+      try {
+        const res = await fetch(`/upload/status/${uploadId}`);
+        if (res.status === 404) {
+          fill.className        = 'bar-fill ok';
+          syncFill.className    = 'sync-fill ok';
+          syncFill.style.width  = '100%';
+          syncPct.textContent   = '100%';
+          label.textContent     = 'Done ✓';
+          toast(`${file.name} uploaded`, 'ok');
+          loadFiles();
+          setTimeout(() => card.classList.remove('visible'), 2200);
+          return;
+        }
+        if (!res.ok) continue;
+        data = await res.json();
+      } catch {
+        continue;
+      }
+
+      const pct = data.github_percent ?? 0;
+      syncFill.style.width = pct + '%';
+      syncPct.textContent  = pct + '%';
+      label.textContent    = `Syncing to GitHub… ${pct}%`;
+
+      if (data.status === 'done') {
+        fill.className        = 'bar-fill ok';
+        syncFill.className    = 'sync-fill ok';
+        syncFill.style.width  = '100%';
+        syncPct.textContent   = '100%';
+        label.textContent     = 'Done ✓';
+        toast(`${file.name} uploaded`, 'ok');
+        loadFiles();
+        setTimeout(() => card.classList.remove('visible'), 2200);
+        return;
+      }
+
+      if (data.status === 'duplicate') {
+        fill.className        = 'bar-fill ok';
+        syncFill.className    = 'sync-fill ok';
+        syncFill.style.width  = '100%';
+        label.textContent     = 'Already stored';
+        toast(`${file.name} already exists`, 'inf');
+        loadFiles();
+        setTimeout(() => card.classList.remove('visible'), 2200);
+        return;
+      }
+
+      if (data.status === 'error') {
+        fill.className    = 'bar-fill err';
+        label.textContent = 'Error: ' + data.error;
+        toast('Upload error: ' + data.error, 'err');
         return;
       }
     }
@@ -553,11 +672,11 @@
     let   received = 0;
 
     while (true) {
-      let chunk;
-      try { chunk = await reader.read(); } catch { break; }
-      if (chunk.done) break;
-      parts.push(chunk.value);
-      received += chunk.value.length;
+      let c;
+      try { c = await reader.read(); } catch { break; }
+      if (c.done) break;
+      parts.push(c.value);
+      received += c.value.length;
       if (sizeBytes > 0) {
         bar.style.width = Math.min(100, Math.round(received / sizeBytes * 100)) + '%';
       }
