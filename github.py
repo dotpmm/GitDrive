@@ -42,7 +42,7 @@ class GitHubClient:
                     payload["sha"] = sha
 
                 with httpx.Client() as client:
-                    r = client.put(url, headers=self._headers, json=payload)
+                    r = client.put(f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}", headers=self._headers, json=payload)
 
                 if r.status_code in (200, 201):
                     return r.json()
