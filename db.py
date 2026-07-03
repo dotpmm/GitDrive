@@ -2,8 +2,11 @@ import os
 from datetime import datetime, timezone
 from pymongo import MongoClient, DESCENDING
 from pymongo.collection import Collection
+from dotenv import load_dotenv
 
-REPO_SIZE_LIMIT = 2 * 1024 * 1024 * 1024
+load_dotenv()
+
+REPO_SIZE_LIMIT = 3 * 1024 * 1024 * 1024
 
 _client: MongoClient = MongoClient(os.environ["MONGODB_URI"]) 
 _db = _client[os.environ.get("DATABASE_NAME")]
