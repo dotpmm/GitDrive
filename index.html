@@ -442,7 +442,7 @@
     chunk.textContent = '';
     speed.textContent = '';
 
-    const uploadId    = crypto.randomUUID();
+    const uploadId    = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
     const mime        = file.type || 'application/octet-stream';
     const startTime   = Date.now();
