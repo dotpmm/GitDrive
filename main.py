@@ -83,6 +83,7 @@ async def _finalize(sess: dict) -> None:
         sha256=file_sha,
         original_filename=sess["filename"],
         repo=sess["repo"],
+        relative_path=sess.get("relative_path", ""),
         mime_type=sess["mime_type"],
         size_bytes=sess["size_bytes"],
         is_chunked=is_multi,
@@ -169,6 +170,7 @@ async def receive_chunk(
     filename:     str        = Form(...),
     mime_type:    str        = Form(""),
     size_bytes:   int        = Form(...),
+    relative_path: str       = Form(""),
 ) -> dict:
     t0        = time.perf_counter()
     data      = await chunk.read()
@@ -196,6 +198,7 @@ async def receive_chunk(
         _sessions[upload_id] = {
             "hasher":     hashlib.sha256(),
             "upload_id":  upload_id,
+            "relative_path":   relative_path,
             "chunks":     [],
             "total_chunks": total_chunks,
             "filename":   filename,

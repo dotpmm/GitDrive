@@ -57,6 +57,7 @@ def upsert_file(
     sha256: str,
     original_filename: str,
     repo: str,
+    relative_path: str = "",
     mime_type: str,
     size_bytes: int,
     is_chunked: bool = False,
@@ -65,6 +66,7 @@ def upsert_file(
     doc = {
         "sha256": sha256,
         "original_filename": original_filename,
+        "relative_path": relative_path,
         "repo": repo,
         "mime_type": mime_type,
         "size_bytes": size_bytes,
