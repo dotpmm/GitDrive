@@ -207,7 +207,7 @@ async def receive_chunk(
             "status":     "receiving",
             "error":      None,
             "lock":       asyncio.Lock(),
-            "dir":        ess_dir,
+            "dir":        sess_dir,
         }
 
     sess = _sessions[upload_id]
