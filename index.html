@@ -467,6 +467,31 @@
     document.getElementById('syncPct').textContent   = '0%';
   }
 
+  function uploadChunkXHR(fd, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/upload');
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          onProgress(e.loaded);
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            resolve({ status: 'done' });
+          }
+        } else {
+          reject(new Error(xhr.statusText || 'Server error'));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.send(fd);
+    });
+  }
+
   async function upload(file) {
     const card     = document.getElementById('uploadCard');
     const fill     = document.getElementById('progFill');
@@ -487,7 +512,7 @@
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
     const mime        = file.type || 'application/octet-stream';
     const startTime   = Date.now();
-    let   bytesSent   = 0;
+    let   bytesUploadedPreviously = 0;
 
     for (let i = 0; i < totalChunks; i++) {
       const start = i * CHUNK_SIZE;
@@ -508,36 +533,28 @@
       fd.append('mime_type',    mime);
       fd.append('size_bytes',   file.size || 0);
 
-      let res, data;
+      let data;
       try {
-        res  = await fetch('/upload', { method: 'POST', body: fd });
-        data = await res.json();
+        data = await uploadChunkXHR(fd, (bytesLoadedInChunk) => {
+          const currentTotalSent = bytesUploadedPreviously + bytesLoadedInChunk;
+          const pct = Math.min(99.9, (currentTotalSent / (file.size || 1)) * 100).toFixed(1);
+          fill.style.width = pct + '%';
+          const elapsed = Math.max(0.01, (Date.now() - startTime) / 1000);
+          speed.textContent = fmtSpeed(currentTotalSent / elapsed);
+        });
       } catch (e) {
         fill.className    = 'bar-fill err';
         fill.style.width  = '100%';
-        label.textContent = 'Network error';
+        label.textContent = 'Upload failed';
         chunk.textContent = '';
         speed.textContent = '';
         toast('Upload failed: ' + e.message, 'err');
         return;
       }
 
-      if (!res.ok) {
-        fill.className    = 'bar-fill err';
-        fill.style.width  = '100%';
-        label.textContent = 'Error';
-        chunk.textContent = '';
-        speed.textContent = '';
-        toast('Upload error: ' + (data.detail || res.statusText), 'err');
-        return;
-      }
-
-      bytesSent        += (end - start);
-      const elapsed     = Math.max(0.01, (Date.now() - startTime) / 1000);
-      speed.textContent = fmtSpeed(bytesSent / elapsed);
+      bytesUploadedPreviously += (end - start);
 
       if (data.status === 'received') {
-        fill.style.width = data.percent + '%';
         continue;
       }
 
@@ -654,7 +671,7 @@
     } catch (e) {
       row.style.display = 'none';
       btn.disabled      = false;
-      btn.textContent   = 'Download';
+      btn.textContent   = '↓ Download';
       toast('Download failed: ' + e.message, 'err');
       return;
     }
@@ -662,7 +679,7 @@
     if (!res.ok) {
       row.style.display = 'none';
       btn.disabled      = false;
-      btn.textContent   = 'Download';
+      btn.textContent   = '↓ Download';
       toast(`Download error ${res.status}`, 'err');
       return;
     }
@@ -689,7 +706,7 @@
 
     row.style.display = 'none';
     btn.disabled      = false;
-    btn.textContent   = 'Download';
+    btn.textContent   = '↓ Download';
     toast(`${filename} saved`, 'ok');
   }
 
