@@ -90,6 +90,7 @@ async def _finalize(sess: dict) -> None:
     )
     db.increment_repo_size(sess["repo"], sess["size_bytes"])
     sess["status"] = "done"
+    shutil.rmtree(sess["dir"], ignore_errors=True)
     # the only place where u can see the filename and its associated sha lmao
     log.info("FILE-SHA=%.12s FILE=%r c=%d repo=%s",file_sha, sess["filename"], sess["total_chunks"], sess["repo"])
 
@@ -124,6 +125,7 @@ async def _worker(worker_id: int) -> None:
             if sess:
                 sess["status"] = "error"
                 sess["error"]  = str(exc)
+                shutil.rmtree(sess["dir"], ignore_errors=True)
 
         finally:
             _queue.task_done()
