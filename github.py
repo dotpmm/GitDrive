@@ -1,9 +1,6 @@
 import base64
 import httpx
 
-BASE = "https://api.github.com"
-OWNER = "dot-shad0w"
-
 class GitHubClient:
     def __init__(self, token: str) -> None:
         self._headers = {
@@ -15,9 +12,9 @@ class GitHubClient:
     def create_repo(self, name: str) -> dict:
         with httpx.Client() as client:
             r = client.post(
-                f"{BASE}/user/repos",
+                f"https://api.github.com/user/repos",
                 headers=self._headers,
-                json={"name": name, "private": True, "auto_init": True},
+                json={"name": name, "private": False, "auto_init": True},
             )
         if r.status_code == 422:
             return 
@@ -29,18 +26,18 @@ class GitHubClient:
 
         with httpx.Client() as client:
             existing = client.get(
-                f"{BASE}/repos/{OWNER}/{repo}/contents/{path}",
+                f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
                 headers=self._headers,
             )
             if existing.status_code == 200:
                 sha = existing.json()["sha"]
 
-            payload: dict = {"message": f"{path}", "content": encoded}
+            payload: dict = {"message": path[-8:], "content": encoded}
             if sha:
                 payload["sha"] = sha
 
             r = client.put(
-                f"{BASE}/repos/{OWNER}/{repo}/contents/{path}",
+                f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
                 headers=self._headers,
                 json=payload,
             )
@@ -49,7 +46,7 @@ class GitHubClient:
     def download_file(self, repo: str, path: str) -> bytes:
         with httpx.Client() as client:
             r = client.get(
-                f"{BASE}/repos/{OWNER}/{repo}/contents/{path}",
+                f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
                 headers={**self._headers, "Accept": "application/vnd.github.raw+json"},
             )
         return r.content
