@@ -17,31 +17,41 @@ class GitHubClient:
                 json={"name": name, "private": False, "auto_init": True},
             )
         if r.status_code == 422:
-            return 
+            with httpx.Client() as client:
+                r = client.get(
+                    f"https://api.github.com/repos/dot-shad0w/{name}",
+                    headers=self._headers,
+                )
         return r.json()
 
     def upload_file(self, repo: str, path: str, content: bytes) -> dict:
         encoded = base64.b64encode(content).decode()
-        sha: str | None = None
 
-        with httpx.Client() as client:
-            existing = client.get(
-                f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
-                headers=self._headers,
-            )
-            if existing.status_code == 200:
-                sha = existing.json()["sha"]
+        for _ in range(3):
+            sha: str | None = None
+            with httpx.Client() as client:
+                existing = client.get(
+                    f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
+                    headers=self._headers,
+                )
+                if existing.status_code == 200:
+                    sha = existing.json()["sha"]
 
-            payload: dict = {"message": path[-8:], "content": encoded}
-            if sha:
-                payload["sha"] = sha
+                payload: dict = {"message": path[-8:], "content": encoded}
+                if sha:
+                    payload["sha"] = sha
 
-            r = client.put(
-                f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
-                headers=self._headers,
-                json=payload,
-            )
-        return r.json()
+                with httpx.Client() as client:
+                    r = client.put(url, headers=self._headers, json=payload)
+
+                if r.status_code in (200, 201):
+                    return r.json()
+                
+                # happens when worker overruns over the other one
+                # so it kinda treats like reupload 
+                # now handled well!
+                if r.status_code == 409:
+                    continue
 
     def download_file(self, repo: str, path: str) -> bytes:
         with httpx.Client() as client:

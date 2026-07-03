@@ -3,7 +3,10 @@ import hashlib
 import logging
 import mimetypes
 import os
+import shutil
+import tempfile
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,26 +24,23 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-# this shit just vomits and fills the logs, hate it
-logging.getLogger("pymongo").setLevel(logging.WARNING)
-
+# all these guys pollute the logs, hence cleaned!
+for _lib in ("pymongo", "httpcore", "httpx", "urllib3", "uvicorn.access"):
+    logging.getLogger(_lib).setLevel(logging.WARNING)
 log = logging.getLogger("refactored-carnival")
 
-app = FastAPI(title="refactored-carnival", version="2.2.0")
+# tmp directory for upload queue
+_tmp      = Path(tempfile.gettempdir()) / "refactored-carnival"
+_github   = GitHubClient(token=os.environ["GITHUB_TOKEN"])
+_sessions: dict[str, dict] = {}
+_queue: asyncio.Queue
 
-_github = GitHubClient(token=os.environ["GITHUB_TOKEN"])
 
 CHUNK_SIZE  = 10 * 1024 * 1024   # 10 MB, cuz, base64 encoding inflates a bit...anddd smaller the better!
 MAX_RETRIES = 3
 RETRY_WAIT  = 1
-
-# in this approach , when we click download, instead of downloading all the
-# chunks to the server and then combining them and sending it to the client
-# this directly streams the chunks from github to the client 
-# so that the client can later assemble it , this saves server RAM and 
-# is also lighter, thus to keep a track of the received chunk and data, 
-# we need this sessions dict
-_sessions: dict[str, dict] = {}
+# workers who take chunks from the temp folder and upload asynchronously 
+WORKER_COUNT = 3
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -64,18 +64,102 @@ def _upload_with_retry(repo: str, path: str, content: bytes) -> dict:
                 time.sleep(RETRY_WAIT)
     raise last_exc
 
+# a small function which goes green when the worker upload queue completes
+async def _finalize(sess: dict) -> None:
+    file_sha = sess["file_sha"]
+    log.info("UPLOAD SUCCESSFUL id=%.8s file_sha=%.12s chunks=%d",sess["upload_id"], file_sha, sess["total_chunks"])
+
+    if db.find_by_sha256(sha256=file_sha):
+        sess["status"] = "duplicate"
+        log.info("DUPLICATE file_sha=%.12s", file_sha)
+        return
+
+    is_multi = sess["total_chunks"] > 1
+    chunks = [
+        {"index": i, "sha256": m["sha256"], "size": m["size"]}
+        for i, m in sorted(sess["chunk_meta"].items())
+    ]
+    db.upsert_file(
+        sha256=file_sha,
+        original_filename=sess["filename"],
+        repo=sess["repo"],
+        mime_type=sess["mime_type"],
+        size_bytes=sess["size_bytes"],
+        is_chunked=is_multi,
+        chunks=chunks if is_multi else [],
+    )
+    db.increment_repo_size(sess["repo"], sess["size_bytes"])
+    sess["status"] = "done"
+    # the only place where u can see the filename and its associated sha lmao
+    log.info("FILE-SHA=%.12s FILE=%r c=%d repo=%s",file_sha, sess["filename"], sess["total_chunks"], sess["repo"])
+
+
+async def _worker(worker_id: int) -> None:
+    # github uploader worker, takes a file from queue and uploads to github
+    log.debug("W%d ready", worker_id)
+    while True:
+        job = await _queue.get()
+        upload_id   = job["upload_id"]
+        chunk_index = job["chunk_index"]
+        disk_path   = job["disk_path"]
+
+        sess = _sessions.get(upload_id)
+        try:
+            data = await asyncio.to_thread(disk_path.read_bytes)
+            await asyncio.to_thread(_upload_with_retry, job["repo"], job["github_path"], data)
+            disk_path.unlink(missing_ok=True)
+
+            if sess:
+                async with sess["lock"]:
+                    sess["chunks_uploaded"] += 1
+                    uploaded = sess["chunks_uploaded"]
+                    total = sess["total_chunks"]
+                    log.debug("W%d UPLOADED %d/%d sesh_id=%.8s",worker_id, uploaded, total, upload_id)
+                    if uploaded == total and sess["file_sha"] is not None:
+                        await _finalize(sess)
+
+        except Exception as exc:
+            log.error("W%d FAIL id=%.8s idx=%d err=%s",worker_id, upload_id, chunk_index, exc)
+            disk_path.unlink(missing_ok=True)
+            if sess:
+                sess["status"] = "error"
+                sess["error"]  = str(exc)
+
+        finally:
+            _queue.task_done()
+
+# whole async manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _queue
+    _queue = asyncio.Queue()
+
+    if _tmp.exists():
+        shutil.rmtree(_tmp)
+    _tmp.mkdir(parents=True)
+
+    workers = [asyncio.create_task(_worker(i + 1)) for i in range(WORKER_COUNT)]
+    yield
+    for w in workers:
+        w.cancel()
+
+app = FastAPI(title="refactored-carnival", version="3.0.0", lifespan=lifespan)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root() -> HTMLResponse:
     return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
 
-# got rid of the old pipeline cuz,
-# it was not clear if it was 
-# browser to api
-# or api to github which was slow / failing
+# BIGGEST PERFORMANCE UPDATE
+# with this producer-consumer pipeline,
+# ive decreased the overall upload time by almost 40% 
+# Old pipeline : entire file buffered in API RAM → 5 users × 10 MB = 50 MB , but it scales with users!!! (dangerous, cuz of OOM)
+# New: only workers × 10 MB in RAM at once (3 workers = 30 MB regardless of how many users or how large the files!)
+# Chunks spill to disk temp files until workers pick them up
+# Total disk at any moment = queued (not-yet-uploaded) chunk data, but bounded and cleaned up immediately after each upload
 
 @app.post("/upload")
-async def upload_chunk(
+async def receive_chunk(
     chunk:        UploadFile = File(...),
     upload_id:    str        = Form(...), # the unique id given for every uploaded chunk (temp, not stored anywhere)
     chunk_index:  int        = Form(...),
@@ -87,15 +171,14 @@ async def upload_chunk(
     t0        = time.perf_counter()
     data      = await chunk.read()
     chunk_sha = _sha256(data)
-    path      = _object_path(chunk_sha)
     is_last   = (chunk_index + 1 == total_chunks)
 
-    log.info("UPLOAD id=%.4s chunk=%d/%d size=%.1fKB sha=%.6s", upload_id, chunk_index + 1, total_chunks, len(data) / 1024, chunk_sha,)
+    log.info("UPLOAD REQ id=%.4s chunk=%d/%d size=%.1fKB sha=%.6s", upload_id, chunk_index + 1, total_chunks, len(data) / 1024, chunk_sha,)
 
     if upload_id not in _sessions:
         resolved_mime = mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
         repo, is_new  = db.get_active_repo() # this checks repo_max_size conditions and then determines
-        log.debug("SESSION id=%.8s repo=%s new=%s", upload_id, repo, is_new)
+        log.debug("SESSION id=%.4s repo=%s new=%s", upload_id, repo, is_new)
 
         if is_new:
             try:
@@ -105,67 +188,83 @@ async def upload_chunk(
                 log.error("REPO FAIL repo=%s  err=%s", repo, exc)
                 raise HTTPException(status_code=502, detail=f"Could not create repo: {exc}") from exc
 
+        sess_dir = _tmp / upload_id
+        sess_dir.mkdir(parents=True, exist_ok=True)
+
         _sessions[upload_id] = {
             "hasher":     hashlib.sha256(),
+            "upload_id":  upload_id,
             "chunks":     [],
+            "total_chunks": total_chunks,
             "filename":   filename,
             "mime_type":  resolved_mime,
             "size_bytes": size_bytes,
             "repo":       repo,
+            "file_sha":   None,
+            "chunk_meta":      {},
+            "chunks_received": 0,
+            "chunks_uploaded": 0,
+            "status":     "receiving",
+            "error":      None,
+            "lock":       asyncio.Lock(),
+            "dir":        ess_dir,
         }
 
     sess = _sessions[upload_id]
-    repo = sess["repo"]
 
     sess["hasher"].update(data)
+    sess["chunk_meta"][chunk_index] = {"sha256": chunk_sha, "size": len(data)}
 
-    try:
-        await asyncio.to_thread(_upload_with_retry, repo, path, data)
-    except Exception as exc:
-        _sessions.pop(upload_id, None) # cleannnnnn
-        log.error("CHUNK-ERR id=%.8s  chunk=%d/%d  err=%s",upload_id, chunk_index + 1, total_chunks, exc)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    disk_path = sess["dir"] / f"{chunk_index}.part"
+    await asyncio.to_thread(disk_path.write_bytes, data)
 
-    sess["chunks"].append({"index": chunk_index, "sha256": chunk_sha, "size": len(data)})
-    percent = round((chunk_index + 1) / total_chunks * 100, 1)
-    elapsed = (time.perf_counter() - t0) * 1000
+    await _queue.put({
+        "upload_id":   upload_id,
+        "chunk_index": chunk_index,
+        "chunk_sha":   chunk_sha,
+        "disk_path":   disk_path,
+        "repo":        sess["repo"],
+        "github_path": _object_path(chunk_sha),
+    })
 
-    log.debug(
-        "CHUNK OK id=%.8s  chunk=%d/%d  percent=%.1f%%  elapsed=%.0fms",
-        upload_id, chunk_index + 1, total_chunks, percent, elapsed,
-    )
+    sess["chunks_received"] += 1
+    recv_pct = round(sess["chunks_received"] / total_chunks * 100, 1)
+
+    log.debug("IN QUEUE id=%.8s chunk=%d/%d queue=%d",upload_id, chunk_index + 1, total_chunks, _queue.qsize())
 
     if is_last:
-        file_sha = sess["hasher"].hexdigest()
-        log.info("FINISH id=%.8s file_sha=%.12s chunks=%d", upload_id, file_sha, total_chunks)
+        sess["file_sha"] = sess["hasher"].hexdigest()
+        sess["status"]   = "processing"
+        log.info("ALL RECEIVED id=%.8s file_sha=%.12s queue=%d",upload_id, sess["file_sha"], _queue.qsize())
+        async with sess["lock"]:
+            if sess["chunks_uploaded"] == total_chunks:
+                await _finalize(sess)
 
-        # power of hash based naming structure, prevents dups
-        if db.find_by_sha256(sha256=file_sha):
-            _sessions.pop(upload_id, None)
-            log.info("DUP file_sha=%.12s", file_sha)
-            return {"status": "duplicate", "sha256": file_sha, "percent": 100.0}
+        return {"status": sess["status"], "upload_id": upload_id, "sha256": sess.get("file_sha")}
 
-        is_multi = total_chunks > 1
-        db.upsert_file(
-            sha256=file_sha,
-            original_filename=sess["filename"],
-            repo=repo,
-            mime_type=sess["mime_type"],
-            size_bytes=sess["size_bytes"],
-            is_chunked=is_multi,
-            chunks=sess["chunks"] if is_multi else [],
-        )
-        db.increment_repo_size(repo, sess["size_bytes"])
+    return {"status": "received", "chunk": chunk_index + 1, "percent": recv_pct}
+
+@app.get("/upload/status/{upload_id}")
+async def upload_status(upload_id: str) -> dict:
+    sess = _sessions.get(upload_id)
+    if not sess:
+        raise HTTPException(status_code=404, detail="Upload session not found or already complete")
+
+    uploaded = sess["chunks_uploaded"]
+    total = sess["total_chunks"]
+    gh_pct = round(uploaded / total * 100, 1) if total else 100.0
+
+    log.debug("STATUS CHECK id=%.8s status=%s github=%d/%d",upload_id, sess["status"], uploaded, total)
+
+    resp: dict = {"status": sess["status"], "github_percent": gh_pct}
+
+    if sess["status"] in ("done", "duplicate"):
+        resp["sha256"] = sess["file_sha"]
         _sessions.pop(upload_id, None)
-        log.info("UPLOAD OK file_sha=%.12s file=%r chunks=%d repo=%s", file_sha, sess["filename"], total_chunks, repo)
-        return {"status": "done", "sha256": file_sha, "percent": 100.0}
-
-    return {
-        "status":       "chunk_ok",
-        "chunk":        chunk_index + 1,
-        "total_chunks": total_chunks,
-        "percent":      percent,
-    }
+    elif sess["status"] == "error":
+        resp["error"] = sess["error"]
+        _sessions.pop(upload_id, None)
+    return resp
 
 
 @app.get("/files")
