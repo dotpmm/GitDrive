@@ -19,8 +19,7 @@ from github import GitHubClient
 
 load_dotenv()
 
-_key_src = os.environ.get("GITHUB_TOKEN")
-# creation of key, converts token to a 32-byte key with SHA-256
+_key_src = os.getenv["GITHUB_TOKEN"]
 _aes_key = hashlib.sha256(_key_src.encode()).digest()
 
 def _encrypt(data: bytes) -> bytes:
@@ -38,9 +37,11 @@ def _decrypt(data: bytes) -> bytes:
     except Exception:
         return data
 
+_log_level = logging.DEBUG if os.getenv("LOG_MODE").lower() == "debug" else logging.INFO
+
 logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(levelname)-7s %(asctime)s %(message)s",
+    level=_log_level,
+    format="%(asctime)s %(message)s",
     datefmt="%H:%M:%S",
 )
 
@@ -55,12 +56,11 @@ _github   = GitHubClient(token=os.environ["GITHUB_TOKEN"])
 _sessions: dict[str, dict] = {}
 _queue: asyncio.Queue
 
-
 CHUNK_SIZE  = 10 * 1024 * 1024   # 10 MB, cuz, base64 encoding inflates a bit...anddd smaller the better!
 MAX_RETRIES = 3
 RETRY_WAIT  = 1
 # workers who take chunks from the temp folder and upload asynchronously 
-WORKER_COUNT = 3
+WORKER_COUNT = 5
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -75,11 +75,11 @@ def _upload_with_retry(repo: str, path: str, content: bytes, filename: str | Non
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             result = _github.upload_file(repo=repo, path=path, content=content, filename=filename)
-            log.debug("GITPUT path=%s attempt=%d", path, attempt)
+            log.debug("GITPUSH path=%s attempt=%d", path, attempt)
             return result
         except Exception as exc:
             last_exc = exc
-            log.warning("GITPUT FAIL path=%s attempt=%d/%d err=%s", path, attempt, MAX_RETRIES, exc)
+            log.warning("GITFAIL path=%s attempt=%d/%d err=%s", path, attempt, MAX_RETRIES, exc)
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_WAIT)
     raise last_exc
@@ -113,7 +113,7 @@ async def _finalize(sess: dict) -> None:
     sess["status"] = "done"
     shutil.rmtree(sess["dir"], ignore_errors=True)
     # the only place where u can see the filename and its associated sha lmao
-    log.info("FILE-SHA=%.12s FILE=%r c=%d repo=%s",file_sha, sess["filename"], sess["total_chunks"], sess["repo"])
+    log.info("META SHA=%.12s FILE=%r c=%d repo=%s",file_sha, sess["filename"], sess["total_chunks"], sess["repo"])
 
 
 async def _worker(worker_id: int) -> None:
@@ -197,7 +197,7 @@ async def receive_chunk(
     chunk_sha = _sha256(data)
     is_last   = (chunk_index + 1 == total_chunks)
 
-    log.info("UPLOAD REQ id=%.4s chunk=%d/%d size=%.1fKB sha=%.6s", upload_id, chunk_index + 1, total_chunks, len(data) / 1024, chunk_sha,)
+    log.info("UPLOAD INIT id=%.4s chunk=%d/%d size=%.1fKB sha=%.6s", upload_id, chunk_index + 1, total_chunks, len(data) / 1024, chunk_sha,)
 
     if upload_id not in _sessions:
         resolved_mime = mime_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -205,12 +205,8 @@ async def receive_chunk(
         log.debug("SESSION id=%.4s repo=%s new=%s", upload_id, repo, is_new)
 
         if is_new:
-            try:
-                await asyncio.to_thread(_github.create_repo, repo)
-                log.info("REPO CREATE name=%s", repo)
-            except Exception as exc:
-                log.error("REPO FAIL repo=%s  err=%s", repo, exc)
-                raise HTTPException(status_code=502, detail=f"Could not create repo: {exc}") from exc
+            await asyncio.to_thread(_github.create_repo, repo)
+            log.info("REPO CREATE name=%s", repo)
 
         sess_dir = _tmp / upload_id
         sess_dir.mkdir(parents=True, exist_ok=True)
@@ -258,12 +254,12 @@ async def receive_chunk(
     sess["chunks_received"] += 1
     recv_pct = round(sess["chunks_received"] / total_chunks * 100, 1)
 
-    log.debug("IN QUEUE id=%.8s chunk=%d/%d queue=%d",upload_id, chunk_index + 1, total_chunks, _queue.qsize())
+    log.debug("QUEUE id=%.8s chunk-idx=%d queue-size=%d",upload_id, chunk_index + 1, _queue.qsize())
 
     if is_last:
         sess["file_sha"] = sess["hasher"].hexdigest()
         sess["status"]   = "processing"
-        log.info("ALL RECEIVED id=%.8s file_sha=%.12s queue=%d",upload_id, sess["file_sha"], _queue.qsize())
+        log.info("ALL RECEIVED id=%.8s file_sha=%.12s still-in-queue=%d",upload_id, sess["file_sha"], _queue.qsize())
         async with sess["lock"]:
             if sess["chunks_uploaded"] == total_chunks:
                 await _finalize(sess)
@@ -282,7 +278,7 @@ async def upload_status(upload_id: str) -> dict:
     total = sess["total_chunks"]
     gh_pct = round(uploaded / total * 100, 1) if total else 100.0
 
-    log.debug("STATUS CHECK id=%.8s status=%s github=%d/%d",upload_id, sess["status"], uploaded, total)
+    log.debug("STATUS id=%.8s status=%s github=%d/%d",upload_id, sess["status"], uploaded, total)
 
     resp: dict = {"status": sess["status"], "github_percent": gh_pct}
 
@@ -297,15 +293,14 @@ async def upload_status(upload_id: str) -> dict:
 
 @app.get("/files")
 async def list_files() -> list[dict]:
-    files = db.list_all_files()
-    return files
+    return db.list_all_files()
 
 
 @app.get("/download/{file_sha256}", response_model=None)
 async def download_file(file_sha256: str) -> Response | StreamingResponse:
     record = db.find_by_sha256(sha256=file_sha256)
     if not record:
-        log.warning("DOWN 404 sha=%.12s", file_sha256)
+        log.warning("404 sha=%.12s", file_sha256)
         raise HTTPException(status_code=404, detail=f"No file found for SHA-256 {file_sha256!r}")
 
     repo     = record["repo"]
@@ -314,7 +309,7 @@ async def download_file(file_sha256: str) -> Response | StreamingResponse:
         "Content-Disposition": f'attachment; filename="{filename}"',
         "Content-Length":      str(record["size_bytes"]),
     }
-    log.info("DOWN sha=%.12s file=%r chunked=%s", file_sha256, filename, record.get("is_chunked"))
+    log.info("DOWNLOAD INIT sha=%.12s file=%r chunked=%s", file_sha256, filename, record.get("is_chunked"))
 
     if record.get("is_chunked"):
         chunks = sorted(record["chunks"], key=lambda c: c["index"])
@@ -322,20 +317,20 @@ async def download_file(file_sha256: str) -> Response | StreamingResponse:
 
         def _iter_chunks():
             for c in chunks:
-                log.debug("FETCHC idx=%d sha=%.12s", c["index"], c["sha256"])
+                log.debug("FETCH CHUNK idx=%d sha=%.12s", c["index"], c["sha256"])
                 enc_data = _github.download_file(repo=repo, path=_object_path(c["sha256"]))
                 yield _decrypt(enc_data)
 
         return StreamingResponse(_iter_chunks(), media_type=record["mime_type"], headers=headers)
 
     try:
-        log.debug("FETCHS sha=%.12s", file_sha256)
-        storage_sha = record["chunks"][0]["sha256"] if len(record.get("chunks") or []) > 0 else record["sha256"]        
+        log.debug("FETCH SINGLE sha=%.12s", file_sha256)
+        storage_sha = record["chunks"][0]["sha256"]
         enc_data = _github.download_file(repo=repo, path=_object_path(storage_sha))
         data = _decrypt(enc_data)
     except Exception as exc:
-        log.error("DOWN ERR sha=%.12s err=%s", file_sha256, exc)
+        log.error("DOWNLOAD ERROR sha=%.12s err=%s", file_sha256, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    log.info("DOWN OK sha=%.12s size=%dB", file_sha256, len(data))
+    log.info("DOWNLOAD SUCCESSFUL sha=%.12s size=%dB", file_sha256, len(data))
     return Response(content=data, media_type=record["mime_type"], headers=headers)
