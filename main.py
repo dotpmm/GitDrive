@@ -48,10 +48,10 @@ logging.basicConfig(
 # all these guys pollute the logs, hence cleaned!
 for _lib in ("pymongo", "httpcore", "httpx", "urllib3", "uvicorn.access"):
     logging.getLogger(_lib).setLevel(logging.WARNING)
-log = logging.getLogger("refactored-carnival")
+log = logging.getLogger("GitDrive")
 
 # tmp directory for upload queue
-_tmp      = Path(tempfile.gettempdir()) / "refactored-carnival"
+_tmp      = Path(tempfile.gettempdir()) / "GitDrive"
 _github   = GitHubClient(token=os.environ["GITHUB_TOKEN"])
 _sessions: dict[str, dict] = {}
 _queue: asyncio.Queue
@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
     for w in workers:
         w.cancel()
 
-app = FastAPI(title="refactored-carnival", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="GitDrive", version="3.5.0", lifespan=lifespan)
 
 
 @app.get("/", response_class=HTMLResponse)

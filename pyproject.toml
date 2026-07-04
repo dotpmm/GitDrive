@@ -1,7 +1,7 @@
 [project]
-name = "refactored-carnival"
-version = "3.0.0"
-description = "refactored-carnival"
+name = "GitDrive"
+version = "3.5.0"
+description = "GitDrive"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
