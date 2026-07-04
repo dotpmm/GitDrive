@@ -107,7 +107,7 @@ async def _finalize(sess: dict) -> None:
         mime_type=sess["mime_type"],
         size_bytes=sess["size_bytes"],
         is_chunked=is_multi,
-        chunks=chunks if is_multi else [],
+        chunks=chunks,
     )
     db.increment_repo_size(sess["repo"], sess["size_bytes"])
     sess["status"] = "done"
@@ -329,7 +329,7 @@ async def download_file(file_sha256: str) -> Response | StreamingResponse:
 
     try:
         log.debug("FETCHS sha=%.12s", file_sha256)
-        storage_sha = record["chunks"][0]["sha256"] if record.get("chunks") else record["sha256"]
+        storage_sha = record["chunks"][0]["sha256"] if len(record.get("chunks") or []) > 0 else record["sha256"]        
         enc_data = _github.download_file(repo=repo, path=_object_path(storage_sha))
         data = _decrypt(enc_data)
     except Exception as exc:
