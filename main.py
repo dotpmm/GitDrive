@@ -28,8 +28,15 @@ def _encrypt(data: bytes) -> bytes:
     return nonce + AESGCM(_aes_key).encrypt(nonce, data, None)
     #              ^^^^ encrypted blob packet (with the key attached)
 def _decrypt(data: bytes) -> bytes:
-    return AESGCM(_aes_key).decrypt(data[:12], data[12:], None)
-    #      ^^^ splitting and decrypting
+    # this was needed, cuz so of my older
+    # files were not encrypted so, while dowloading them
+    # u dont get anything by decrypting them lmao
+    # empty string resp
+    try:
+        return AESGCM(_aes_key).decrypt(data[:12], data[12:], None)
+        #      ^^^ splitting and decrypting
+    except Exception:
+        return data
 
 logging.basicConfig(
     level=logging.DEBUG,
