@@ -19,7 +19,7 @@ from github import GitHubClient
 
 load_dotenv()
 
-_key_src = os.getenv["GITHUB_TOKEN"]
+_key_src = os.getenv("GITHUB_TOKEN")
 _aes_key = hashlib.sha256(_key_src.encode()).digest()
 
 def _encrypt(data: bytes) -> bytes:
