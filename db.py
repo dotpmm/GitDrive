@@ -34,7 +34,7 @@ def get_active_repo() -> tuple[str, bool]:
         return repo_doc["name"], False
 
     count = repos.count_documents({})
-    new_name = f".store-{count + 1}"
+    new_name = f"dotpmm-{count + 1}"
     repos.insert_one({
         "name": new_name,
         "total_bytes": 0,

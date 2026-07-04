@@ -10,7 +10,6 @@ class GitHubClient:
         }
 
     def create_repo(self, name: str) -> dict:
-        name = name.lstrip(".")
         with httpx.Client() as client:
             r = client.post(
                 f"https://api.github.com/user/repos",
@@ -26,7 +25,6 @@ class GitHubClient:
         return r.json()
 
     def upload_file(self, repo: str, path: str, content: bytes) -> dict:
-        repo = repo.lstrip(".")
         encoded = base64.b64encode(content).decode()
 
         for _ in range(3):
@@ -56,7 +54,6 @@ class GitHubClient:
                     continue
 
     def download_file(self, repo: str, path: str) -> bytes:
-        repo = repo.lstrip(".")
         with httpx.Client() as client:
             r = client.get(
                 f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
