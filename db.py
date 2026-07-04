@@ -1,17 +1,17 @@
 import os
 from datetime import datetime, timezone
 from pymongo import MongoClient, DESCENDING
-from pymongo.collection import Collection
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 REPO_SIZE_LIMIT = 3 * 1024 * 1024 * 1024
 
-_client: MongoClient = MongoClient(os.environ["MONGODB_URI"]) 
-_db = _client[os.environ.get("DATABASE_NAME")]
-files: Collection = _db["files"] 
-repos: Collection = _db["repos"]
+_client = MongoClient(os.environ["MONGODB_URI"])
+_db = _client[os.environ["DATABASE_NAME"]]
+files = _db["files"]
+repos = _db["repos"]
 
 files.create_index([("sha256", 1)], unique=True, name="hash")
 files.create_index([("repo", 1)], name="repo_idx")
@@ -34,7 +34,7 @@ def get_active_repo() -> tuple[str, bool]:
         return repo_doc["name"], False
 
     count = repos.count_documents({})
-    new_name = f"dotpmm-{count + 1}"
+    new_name = f"dotstore-{count + 1}"
     repos.insert_one({
         "name": new_name,
         "total_bytes": 0,
@@ -61,7 +61,7 @@ def upsert_file(
     mime_type: str,
     size_bytes: int,
     is_chunked: bool = False,
-    chunks: list[dict] | None = None,
+    chunks: list[dict],
 ) -> dict:
     doc = {
         "sha256": sha256,
@@ -71,8 +71,8 @@ def upsert_file(
         "mime_type": mime_type,
         "size_bytes": size_bytes,
         "is_chunked": is_chunked,
-        "chunk_count": len(chunks) if chunks else 0,
-        "chunks": chunks or [],
+        "chunk_count": len(chunks),
+        "chunks": chunks,
         "uploaded_at": datetime.now(timezone.utc),
     }
     result = files.find_one_and_update(

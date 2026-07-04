@@ -70,11 +70,11 @@ def _object_path(sha: str) -> str:
     return f"objects/{sha[:2]}/{sha[2:]}.chunk"
 
 # needed cuz , github throws a bad mac error sometimes on some systems (atleast on mine.. :( )
-def _upload_with_retry(repo: str, path: str, content: bytes) -> dict:
+def _upload_with_retry(repo: str, path: str, content: bytes, filename: str | None = None) -> dict:
     last_exc: Exception = RuntimeError("no attempt made")
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            result = _github.upload_file(repo=repo, path=path, content=content)
+            result = _github.upload_file(repo=repo, path=path, content=content, filename=filename)
             log.debug("GITPUT path=%s attempt=%d", path, attempt)
             return result
         except Exception as exc:
@@ -128,7 +128,7 @@ async def _worker(worker_id: int) -> None:
         sess = _sessions.get(upload_id)
         try:
             data = await asyncio.to_thread(disk_path.read_bytes)
-            await asyncio.to_thread(_upload_with_retry, job["repo"], job["github_path"], data)
+            await asyncio.to_thread(_upload_with_retry, job["repo"], job["github_path"], data, job.get("filename"))
             disk_path.unlink(missing_ok=True)
 
             if sess:
@@ -252,6 +252,7 @@ async def receive_chunk(
         "disk_path":   disk_path,
         "repo":        sess["repo"],
         "github_path": _object_path(enc_sha),
+        "filename":    sess["filename"],
     })
 
     sess["chunks_received"] += 1
