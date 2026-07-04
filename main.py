@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,6 +18,18 @@ import db
 from github import GitHubClient
 
 load_dotenv()
+
+_key_src = os.environ.get("GITHUB_TOKEN")
+# creation of key, converts token to a 32-byte key with SHA-256
+_aes_key = hashlib.sha256(_key_src.encode()).digest()
+
+def _encrypt(data: bytes) -> bytes:
+    nonce = os.urandom(12)
+    return nonce + AESGCM(_aes_key).encrypt(nonce, data, None)
+    #              ^^^^ encrypted blob packet (with the key attached)
+def _decrypt(data: bytes) -> bytes:
+    return AESGCM(_aes_key).decrypt(data[:12], data[12:], None)
+    #      ^^^ splitting and decrypting
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -218,18 +231,20 @@ async def receive_chunk(
     sess = _sessions[upload_id]
 
     sess["hasher"].update(data)
-    sess["chunk_meta"][chunk_index] = {"sha256": chunk_sha, "size": len(data)}
+    enc_data = _encrypt(data)
+    enc_sha  = _sha256(enc_data)
+    sess["chunk_meta"][chunk_index] = {"sha256": enc_sha, "size": len(data)}
 
     disk_path = sess["dir"] / f"{chunk_index}.part"
-    await asyncio.to_thread(disk_path.write_bytes, data)
+    await asyncio.to_thread(disk_path.write_bytes, enc_data)
 
     await _queue.put({
         "upload_id":   upload_id,
         "chunk_index": chunk_index,
-        "chunk_sha":   chunk_sha,
+        "chunk_sha":   enc_sha,
         "disk_path":   disk_path,
         "repo":        sess["repo"],
-        "github_path": _object_path(chunk_sha),
+        "github_path": _object_path(enc_sha),
     })
 
     sess["chunks_received"] += 1
@@ -300,13 +315,16 @@ async def download_file(file_sha256: str) -> Response | StreamingResponse:
         def _iter_chunks():
             for c in chunks:
                 log.debug("FETCHC idx=%d sha=%.12s", c["index"], c["sha256"])
-                yield _github.download_file(repo=repo, path=_object_path(c["sha256"]))
+                enc_data = _github.download_file(repo=repo, path=_object_path(c["sha256"]))
+                yield _decrypt(enc_data)
 
         return StreamingResponse(_iter_chunks(), media_type=record["mime_type"], headers=headers)
 
     try:
         log.debug("FETCHS sha=%.12s", file_sha256)
-        data = _github.download_file(repo=repo, path=_object_path(record["sha256"]))
+        storage_sha = record["chunks"][0]["sha256"] if record.get("chunks") else record["sha256"]
+        enc_data = _github.download_file(repo=repo, path=_object_path(storage_sha))
+        data = _decrypt(enc_data)
     except Exception as exc:
         log.error("DOWN ERR sha=%.12s err=%s", file_sha256, exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc

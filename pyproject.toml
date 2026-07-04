@@ -10,4 +10,5 @@ dependencies = [
     "python-multipart>=0.0.12",
     "python-dotenv>=1.0",
     "pymongo>=4.10",
+    "cryptography>=49.0.0",
 ]
