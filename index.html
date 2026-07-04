@@ -469,16 +469,36 @@
     }
   }
 
+  function copyToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        document.execCommand('copy');
+      } catch (err) {
+        console.error(err);
+      }
+      document.body.removeChild(textarea);
+      return Promise.resolve();
+    }
+  }
+
   function shareFile(sha) {
     const url = `${window.location.origin}/download/${sha}`;
-    navigator.clipboard.writeText(url).then(() => {
+    copyToClipboard(url).then(() => {
       toast('Share link copied!', 'ok');
     });
   }
 
   function shareFolder(name) {
     const url = `${window.location.origin}/?folder=${encodeURIComponent(name)}`;
-    navigator.clipboard.writeText(url).then(() => {
+    copyToClipboard(url).then(() => {
       toast('Share link copied!', 'ok');
     });
   }
