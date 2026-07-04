@@ -59,12 +59,6 @@ class GitHubClient:
                 f"https://api.github.com/repos/dot-shad0w/{repo}/contents/{path}",
                 headers={**self._headers, "Accept": "application/vnd.github.raw+json"},
             )
-        # gitHub contents API returns JSON metadata, not raw bytes, for files over 1 MB.
-        # so if download_url is present, fetch the raw payload from that URL instead so large
-        # files download correctly instead of returning the metadata response.
-        data = r.json()
-        if isinstance(data, dict) and "download_url" in data:
-            with httpx.Client() as client:
-                r2 = client.get(data["download_url"], headers=self._headers)
-            return r2.content
-        raise RuntimeError("Missing download_url")
+        # ahh, that didnt do much, lemme add some debug statements
+        r.raise_for_status()
+        return r.content
