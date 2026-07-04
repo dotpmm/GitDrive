@@ -14,7 +14,7 @@ class GitHubClient:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-        self._owner = os.getenv["GITHUB_OWNER"]
+        self._owner = os.getenv("GITHUB_OWNER")
         self._private = os.getenv("GITHUB_PRIVATE").lower()
         self._commit_name_mode = os.getenv("MASK_COMMITS").lower()
 
