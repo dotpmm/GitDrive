@@ -8,8 +8,8 @@ load_dotenv()
 
 REPO_SIZE_LIMIT = 3 * 1024 * 1024 * 1024
 
-_client = MongoClient(os.environ["MONGODB_URI"])
-_db = _client[os.environ["DATABASE_NAME"]]
+_client = MongoClient(os.getenv["MONGODB_URI"])
+_db = _client[os.getenv["DATABASE_NAME"]]
 files = _db["files"]
 repos = _db["repos"]
 
