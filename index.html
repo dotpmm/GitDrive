@@ -420,6 +420,12 @@
       allFiles = await fetch(`/files?t=${Date.now()}`).then(r => r.json());
       renderFiles(allFiles);
       updateStats();
+      const params = new URLSearchParams(window.location.search);
+      const autoFolder = params.get('folder');
+      if (autoFolder) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+        downloadFolder(autoFolder);
+      }
     } catch {
       toast('Could not load file list', 'err');
     }
@@ -463,6 +469,20 @@
     }
   }
 
+  function shareFile(sha) {
+    const url = `${window.location.origin}/download/${sha}`;
+    navigator.clipboard.writeText(url).then(() => {
+      toast('Share link copied!', 'ok');
+    });
+  }
+
+  function shareFolder(name) {
+    const url = `${window.location.origin}/?folder=${encodeURIComponent(name)}`;
+    navigator.clipboard.writeText(url).then(() => {
+      toast('Share link copied!', 'ok');
+    });
+  }
+
   function renderFiles(list) {
     const body = document.getElementById('filesBody');
     if (!list.length) {
@@ -494,9 +514,12 @@
             <span class="folder-badge">${fileCount} files</span>
           </td>
           <td class="fsz">${fmt(folderSize)}</td>
-          <td>
+          <td style="display: flex; gap: 6px; justify-content: flex-end;">
             <button class="btn-dl" onclick="event.stopPropagation(); downloadFolder('${esc(folderName)}')">
               ↓ Download Folder
+            </button>
+            <button class="btn-dl" onclick="event.stopPropagation(); shareFolder('${esc(folderName)}')">
+              Share
             </button>
           </td>
         </tr>
@@ -510,14 +533,17 @@
         const mime = esc(f.mime_type || 'application/octet-stream');
         html += `
           <tr class="folder-item ${folderId}" style="display:none">
-            <td><div class="fname" style="padding-left: 24px;" title="${esc(f.relative_path)}">↳ ${esc(f.relative_path.substring(folderName.length + 1))}</div></td>
+            <td><div class="fname" style="padding-left: 24px;" title="${esc(f.relative_path)}">${esc(f.original_filename)}</div></td>
             <td class="fsz">${fmt(sz)}</td>
             <td><span class="fsha">${sha.slice(0,10)}…${sha.slice(-4)}</span></td>
             <td>${badge}</td>
-            <td>
+            <td style="display: flex; gap: 6px; justify-content: flex-end;">
               <button class="btn-dl" id="dlbtn-${sha}"
                 onclick="startDownload('${sha}','${esc(f.original_filename)}','${mime}',${sz})">
                 ↓ Download
+              </button>
+              <button class="btn-dl" onclick="shareFile('${sha}')">
+                Share
               </button>
             </td>
           </tr>
@@ -544,10 +570,13 @@
           <td class="fsz">${fmt(sz)}</td>
           <td><span class="fsha">${sha.slice(0,10)}…${sha.slice(-4)}</span></td>
           <td>${badge}</td>
-          <td>
+          <td style="display: flex; gap: 6px; justify-content: flex-end;">
             <button class="btn-dl" id="dlbtn-${sha}"
               onclick="startDownload('${sha}','${esc(f.original_filename)}','${mime}',${sz})">
               ↓ Download
+            </button>
+            <button class="btn-dl" onclick="shareFile('${sha}')">
+              Share
             </button>
           </td>
         </tr>
