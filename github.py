@@ -19,7 +19,7 @@ class GitHubClient:
         self._commit_name_mode = os.getenv("MASK_COMMITS").lower()
 
     def _commit_message(self, path: str, filename: str | None = None) -> str:
-        if self._commit_name_mode == "filename" and filename:
+        if self._commit_name_mode == "false" and filename:
             return filename
         return path[:8]
 
