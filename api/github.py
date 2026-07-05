@@ -16,12 +16,15 @@ class GitHubClient:
         }
         self._owner = os.getenv("GITHUB_OWNER")
         self._private = os.getenv("GITHUB_PRIVATE").lower()
+        if self._private == "true":
+            self._private = True
         self._commit_name_mode = os.getenv("MASK_COMMITS").lower()
 
     def _commit_message(self, path: str, filename: str | None = None) -> str:
         if self._commit_name_mode == "false" and filename:
             return filename
-        return path[9:17]
+        return path[11:19]
+        #           ^^ the starting 8 chars were the same all the time cuz of 'object/ab' lmao
 
     def create_repo(self, name: str) -> dict:
         with httpx.Client() as client:
