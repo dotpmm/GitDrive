@@ -21,7 +21,7 @@ class GitHubClient:
     def _commit_message(self, path: str, filename: str | None = None) -> str:
         if self._commit_name_mode == "false" and filename:
             return filename
-        return path[:8]
+        return path[9:17]
 
     def create_repo(self, name: str) -> dict:
         with httpx.Client() as client:

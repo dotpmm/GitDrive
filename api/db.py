@@ -6,7 +6,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-REPO_SIZE_LIMIT = 3 * 1024 * 1024 * 1024
+REPO_SIZE_LIMIT = 5 * 1024 * 1024 * 1024
+# im still not sure abt this, they say
+# u get a soft warning once hit the 5GB mark
+# lets cap it at 5Gb for now
 
 _client = MongoClient(os.getenv("MONGODB_URI"))
 _db = _client[os.getenv("DATABASE_NAME")]

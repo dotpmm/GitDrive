@@ -14,8 +14,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
-import db
-from github import GitHubClient
+from . import db
+from .github import GitHubClient
 
 load_dotenv()
 
@@ -171,7 +171,7 @@ app = FastAPI(title="GitDrive", version="3.5.0", lifespan=lifespan)
 
 @app.get("/", response_class=HTMLResponse)
 async def root() -> HTMLResponse:
-    return HTMLResponse(content=(Path(__file__).parent / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse(content=(Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8"))
 
 # BIGGEST PERFORMANCE UPDATE
 # with this producer-consumer pipeline,

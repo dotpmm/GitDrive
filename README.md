@@ -52,7 +52,7 @@ All raw payloads are encrypted using AES-256 in Galois/Counter Mode (GCM) with a
 2.  I recommend using [uv](https://github.com/astral-sh/uv), as it's insanely faster than pip, then:
 ```bash
     uv sync
-    uv run uvicorn main:app --host 0.0.0.0 --port 10000
+    uv run uvicorn api.main:app --host 0.0.0.0 --port 10000
 ```
 ---
 
