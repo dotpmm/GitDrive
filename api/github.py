@@ -15,10 +15,8 @@ class GitHubClient:
             "X-GitHub-Api-Version": "2022-11-28",
         }
         self._owner = os.getenv("GITHUB_OWNER")
-        self._private = os.getenv("GITHUB_PRIVATE").lower()
-        if self._private == "true":
-            self._private = True
-        self._commit_name_mode = os.getenv("MASK_COMMITS").lower()
+        self._private = os.getenv("GITHUB_PRIVATE", "false").lower() == "true"
+        self._commit_name_mode = os.getenv("MASK_COMMITS", "false").lower()
 
     def _commit_message(self, path: str, filename: str | None = None) -> str:
         if self._commit_name_mode == "false" and filename:
