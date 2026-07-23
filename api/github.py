@@ -18,7 +18,9 @@ class GitHubClient:
         self._private = os.getenv("GITHUB_PRIVATE", "false").lower() == "true"
         self._commit_name_mode = os.getenv("MASK_COMMITS", "false").lower()
 
-    def _commit_message(self, path: str, filename: str | None = None) -> str:
+    def _commit_message(self, path: str, filename: str | None = None, username: str | None = None) -> str:
+        if username and filename:
+            return f"{username} uploaded {filename}"
         if self._commit_name_mode == "false" and filename:
             return filename
         return path[11:19]
@@ -39,9 +41,9 @@ class GitHubClient:
                 )
         return r.json()
 
-    def upload_file(self, repo: str, path: str, content: bytes, filename: str | None = None) -> dict:
+    def upload_file(self, repo: str, path: str, content: bytes, filename: str | None = None, username: str | None = None) -> dict:
         encoded = base64.b64encode(content).decode()
-        message = self._commit_message(path, filename)
+        message = self._commit_message(path, filename, username)
 
         for _ in range(3):
             sha: str | None = None

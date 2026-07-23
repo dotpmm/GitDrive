@@ -31,10 +31,14 @@ All raw payloads are encrypted using AES-256 in Galois/Counter Mode (GCM) with a
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/` | Returns the core single-page HTML frontend. |
-| `POST` | `/upload` | Accepts multipart chunk form uploads. |
+| `POST` | `/auth/register`, `/auth/login` | Creates an account or returns a bearer session. |
+| `POST` | `/upload` | Accepts authenticated multipart chunk form uploads. |
 | `GET` | `/upload/status/{upload_id}` | Retrieves the sync percentage of the queue workers uploading to GitHub. | 
-| `GET` | `/download/{file_sha256}` | Fetches raw/encrypted blobs from GitHub, decrypts them on-the-fly, and streams the payload back as a direct download. |
-| `GET` | `/files` | Lists all documents inside the MongoDB files collection, sorted by upload time. |
+| `GET` | `/download/{file_sha256}` | Downloads public files or authenticated private files. |
+| `POST` | `/files/{sha}/collaborators` | Adds a GitDrive user to a private file. |
+| `POST` | `/files/{sha}/share` | Creates a public or access-controlled share link. |
+| `GET` | `/share/{token}/download` | Downloads from a share link; private links still require a collaborator account. |
+| `GET` | `/files` | Lists files owned by, shared with, or publicly visible to the signed-in user. |
 
 ## Self-Hosting Guide
 1. Create a `.env` file in the root directory to store these values:
@@ -61,7 +65,6 @@ All raw payloads are encrypted using AES-256 in Galois/Counter Mode (GCM) with a
 - Stuff like `sharable links` and many more are a part of UI, which will be  documented soon!
 
 ### Upcoming Features :
-- user management
 - delete feature (lmao, mb, it not implemented for now)
 - maybe some enhanced features like better logging and setup experience
 - many more , but after frontend launch

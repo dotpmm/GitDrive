@@ -290,6 +290,18 @@
       letter-spacing: .3px;
       margin-left: 8px;
     }
+    .auth-gate { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: rgba(7,7,15,.96); padding: 20px; }
+    .auth-gate.hidden { display: none; }
+    .auth-card { width: min(380px, 100%); padding: 28px; border: 1px solid var(--border-s); border-radius: var(--r); background: #10101c; }
+    .auth-card h1 { margin-bottom: 8px; font-size: 22px; }
+    .auth-card p { color: var(--text-2); font-size: 13px; margin-bottom: 18px; }
+    .auth-card input, .visibility-select { width: 100%; margin: 6px 0; background: var(--surface); border: 1px solid var(--border-s); border-radius: var(--r-s); padding: 10px; color: var(--text); font: inherit; }
+    .auth-card button { width: 100%; margin-top: 10px; padding: 10px; border: 0; border-radius: var(--r-s); background: var(--violet); color: white; cursor: pointer; font: inherit; }
+    .auth-switch { text-align: center; margin-top: 12px; color: var(--violet-l); cursor: pointer; font-size: 12px; }
+    .user-menu { font-size: 12px; color: var(--text-2); display: flex; gap: 10px; align-items: center; }
+    .user-menu button { background: none; border: 0; color: var(--violet-l); cursor: pointer; }
+    .upload-options { display: flex; justify-content: center; gap: 10px; align-items: center; margin: -16px 0 20px; color: var(--text-2); font-size: 12px; }
+    .visibility-select { width: auto; margin: 0; padding: 6px; }
 
     @media (max-width: 620px) {
       header { padding: 14px 16px; }
@@ -301,6 +313,17 @@
   </style>
 </head>
 <body>
+
+<div class="auth-gate" id="authGate">
+  <form class="auth-card" id="authForm">
+    <h1 id="authTitle">Welcome to GitDrive</h1>
+    <p id="authText">Sign in to access your files and shared content.</p>
+    <input id="authUsername" autocomplete="username" placeholder="Username" required>
+    <input id="authPassword" autocomplete="current-password" type="password" placeholder="Password (8+ characters)" required>
+    <button id="authSubmit" type="submit">Sign in</button>
+    <div class="auth-switch" id="authSwitch">Need an account? Create one</div>
+  </form>
+</div>
 
 <header>
   <div class="logo">
@@ -316,6 +339,7 @@
       <div class="stat-lbl">Stored</div>
     </div>
     <div class="repo-pills" id="repoPills"></div>
+    <div class="user-menu"><span id="currentUser"></span><button onclick="logout()">Sign out</button></div>
   </div>
 </header>
 
@@ -326,6 +350,9 @@
     <div class="dz-icon">↑</div>
     <div class="dz-title">Drop files here</div>
     <div class="dz-sub">or click to browse ....any size, any format</div>
+  </div>
+  <div class="upload-options">File visibility
+    <select id="visibility" class="visibility-select"><option value="private">Private — only you and collaborators</option><option value="public">Public — anyone with a link</option></select>
   </div>
 
   <div id="uploadCard">
@@ -376,6 +403,48 @@
 <script>
   const CHUNK_SIZE = 10 * 1024 * 1024;
   let allFiles = [];
+  let registering = false;
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init = {}) => {
+    const token = localStorage.getItem('gitdrive_token');
+    const headers = new Headers(init.headers || {});
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    return nativeFetch(input, { ...init, headers });
+  };
+
+  function setAuthMode(register) {
+    registering = register;
+    document.getElementById('authTitle').textContent = register ? 'Create your GitDrive account' : 'Welcome to GitDrive';
+    document.getElementById('authText').textContent = register ? 'Your account keeps private files and encryption scoped to you.' : 'Sign in to access your files and shared content.';
+    document.getElementById('authSubmit').textContent = register ? 'Create account' : 'Sign in';
+    document.getElementById('authSwitch').textContent = register ? 'Already have an account? Sign in' : 'Need an account? Create one';
+  }
+  document.getElementById('authSwitch').onclick = () => setAuthMode(!registering);
+  document.getElementById('authForm').onsubmit = async e => {
+    e.preventDefault();
+    const form = new FormData();
+    form.append('username', document.getElementById('authUsername').value);
+    form.append('password', document.getElementById('authPassword').value);
+    const res = await fetch(registering ? '/auth/register' : '/auth/login', { method: 'POST', body: form });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return toast(data.detail || 'Could not sign in', 'err');
+    localStorage.setItem('gitdrive_token', data.token);
+    localStorage.setItem('gitdrive_username', data.username);
+    showApp(data.username);
+  };
+  function showApp(username) {
+    document.getElementById('authGate').classList.add('hidden');
+    document.getElementById('currentUser').textContent = username;
+    loadFiles();
+  }
+  async function logout() {
+    await fetch('/auth/logout', { method: 'POST' });
+    localStorage.removeItem('gitdrive_token');
+    localStorage.removeItem('gitdrive_username');
+    allFiles = [];
+    document.getElementById('authGate').classList.remove('hidden');
+  }
 
   function fmt(n) {
     if (n < 1024)       return n + ' B';
@@ -488,11 +557,24 @@
     }
   }
 
-  function shareFile(sha) {
-    const url = `${window.location.origin}/download/${sha}`;
+  async function shareFile(sha) {
+    const res = await fetch(`/files/${sha}/share`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return toast(data.detail || 'Could not create share link', 'err');
+    const url = `${window.location.origin}/share/${data.token}/download`;
     copyToClipboard(url).then(() => {
-      toast('Share link copied!', 'ok');
+      toast(data.visibility === 'public' ? 'Public share link copied!' : 'Private share link copied — recipients must be collaborators.', 'ok');
     });
+  }
+
+  async function addCollaborator(sha) {
+    const username = prompt('GitDrive username to add as a collaborator:');
+    if (!username) return;
+    const form = new FormData(); form.append('username', username.trim());
+    const res = await fetch(`/files/${sha}/collaborators`, { method: 'POST', body: form });
+    const data = await res.json().catch(() => ({}));
+    toast(res.ok ? `${username} can now access this private file.` : (data.detail || 'Could not add collaborator'), res.ok ? 'ok' : 'err');
+    if (res.ok) loadFiles();
   }
 
   function shareFolder(name) {
@@ -564,6 +646,7 @@
               <button class="btn-dl" onclick="shareFile('${sha}')">
                 Share
               </button>
+              ${f.visibility === 'private' && f.owner_username === localStorage.getItem('gitdrive_username') ? `<button class="btn-dl" onclick="addCollaborator('${sha}')">Collaborate</button>` : ''}
             </td>
           </tr>
           <tr class="dl-prog-row ${folderId}" id="dlrow-${sha}" style="display:none">
@@ -597,6 +680,7 @@
             <button class="btn-dl" onclick="shareFile('${sha}')">
               Share
             </button>
+            ${f.visibility === 'private' && f.owner_username === localStorage.getItem('gitdrive_username') ? `<button class="btn-dl" onclick="addCollaborator('${sha}')">Collaborate</button>` : ''}
           </td>
         </tr>
         <tr class="dl-prog-row" id="dlrow-${sha}" style="display:none">
@@ -694,6 +778,8 @@
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/upload');
+      const token = localStorage.getItem('gitdrive_token');
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
           onProgress(e.loaded);
@@ -707,7 +793,14 @@
             resolve({ status: 'done' });
           }
         } else {
-          reject(new Error(xhr.statusText || 'Server error'));
+          let detail = xhr.statusText || 'Server error';
+          try { detail = JSON.parse(xhr.responseText).detail || detail; } catch {}
+          console.error('GitDrive upload request failed', {
+            status: xhr.status,
+            detail,
+            response: xhr.responseText,
+          });
+          reject(new Error(detail));
         }
       };
       xhr.onerror = () => reject(new Error('Network error'));
@@ -756,6 +849,7 @@
       fd.append('mime_type',    mime);
       fd.append('size_bytes',   file.size || 0);
       fd.append('relative_path', customPath);
+      fd.append('visibility', document.getElementById('visibility').value);
 
       let data;
       try {
@@ -934,7 +1028,13 @@
     toast(`${filename} saved`, 'ok');
   }
 
-  loadFiles();
+  (async () => {
+    const token = localStorage.getItem('gitdrive_token');
+    if (!token) return setAuthMode(false);
+    const res = await fetch('/auth/me');
+    if (res.ok) showApp((await res.json()).username);
+    else logout();
+  })();
 </script>
 </body>
 </html>
