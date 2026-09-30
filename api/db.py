@@ -1,7 +1,7 @@
 import os
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient, DESCENDING, ReturnDocument
 
 from dotenv import load_dotenv
@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 REPO_SIZE_LIMIT = 5 * 1024 * 1024 * 1024
+# A browser cannot send an Authorization header on a plain link navigation, so an
+# approved share visit trades its session for a short lived, file-scoped ticket.
+TICKET_TTL_SECONDS = 600
 # im still not sure abt this, they say
 # u get a soft warning once hit the 5GB mark
 # lets cap it at 5Gb for now
@@ -20,12 +23,14 @@ repos = _db["repos"]
 users = _db["users"]
 sessions = _db["sessions"]
 shares = _db["shares"]
+tickets = _db["tickets"]
 
 files.create_index([("sha256", 1)], unique=True, name="hash")
 files.create_index([("repo", 1)], name="repo_idx")
 users.create_index([("username", 1)], unique=True, name="username")
 sessions.create_index([("token", 1)], unique=True, name="session_token")
 shares.create_index([("token", 1)], unique=True, name="share_token")
+tickets.create_index([("expires_at", 1)], name="ticket_expiry")
 
 
 def _serialize(doc: dict) -> dict:
@@ -177,3 +182,25 @@ def create_share(file_sha256: str, visibility: str) -> str:
 
 def find_share(token: str) -> dict | None:
     return shares.find_one({"token": token})
+
+# link ticketing system, so no more link copy and user binding issues
+def create_download_ticket(file_sha256: str, share_token: str) -> tuple[str, datetime]:
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=TICKET_TTL_SECONDS)
+    tickets.insert_one({
+        "token": token,
+        "file_sha256": file_sha256,
+        "share_token": share_token,
+        "expires_at": expires_at,
+        "created_at": datetime.now(timezone.utc),
+    })
+    return token, expires_at
+
+
+def find_download_ticket(token: str) -> dict | None:
+    return tickets.find_one({"token": token, "expires_at": {"$gt": datetime.now(timezone.utc)}})
+
+
+def find_ticket_share(token: str) -> str | None:
+    doc = tickets.find_one({"token": token})
+    return doc["share_token"] if doc else None

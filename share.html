@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Shared file · GitDrive</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #07070f;
+      --surface:   rgba(255,255,255,0.035);
+      --surface-h: rgba(255,255,255,0.065);
+      --border:    rgba(255,255,255,0.07);
+      --border-s:  rgba(255,255,255,0.14);
+      --violet:    #7c3aed;
+      --violet-l:  #a78bfa;
+      --indigo:    #4f46e5;
+      --text:      #f1f5f9;
+      --text-2:    #9aa7b8;
+      --err:       #f87171;
+      --r:         14px;
+      --r-s:       9px;
+    }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background: var(--bg);
+      background-image:
+        radial-gradient(ellipse 70% 50% at 5% 0%,   rgba(124,58,237,.14) 0%, transparent 55%),
+        radial-gradient(ellipse 50% 40% at 95% 100%, rgba(79,70,229,.09)  0%, transparent 55%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: 'Inter', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 18px 28px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+  }
+
+    .logo-mark {
+      width: 30px; height: 30px;
+      background: linear-gradient(135deg, var(--violet), var(--indigo));
+      border-radius: 8px;
+    }
+
+    .stage {
+      display: grid;
+      place-items: center;
+      padding: 24px 20px 48px;
+    }
+
+    .panel {
+      width: min(460px, 100%);
+      background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+      border: 1px solid var(--border-s);
+      border-radius: var(--r);
+      box-shadow: 0 24px 60px -30px rgba(0,0,0,.9);
+      overflow: hidden;
+    }
+
+    .file {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      padding: 24px 24px 22px;
+    }
+
+    .glyph {
+      flex: none;
+      width: 46px; height: 46px;
+      display: grid; place-items: center;
+      border-radius: 12px;
+      background: rgba(124,58,237,.16);
+      border: 1px solid rgba(124,58,237,.28);
+      color: var(--violet-l);
+    }
+    .glyph.lock { background: rgba(255,255,255,.05); border-color: var(--border-s); color: var(--text-2); }
+
+    .fname {
+      font-size: 19px;
+      font-weight: 600;
+      letter-spacing: -.025em;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .fmeta {
+      margin-top: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-2);
+    }
+    .fmeta .dot { color: #5b6474; }
+    .fmeta .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+    .body {
+      padding: 22px 24px 24px;
+      border-top: 1px solid var(--border);
+      background: rgba(7,7,15,.35);
+    }
+
+    h2 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+    .lede { margin-top: 6px; font-size: 15px; line-height: 1.55; color: var(--text-2); }
+
+    .who { margin-top: 4px; font-size: 15px; color: var(--text-2); }
+    .who b { color: var(--text); font-weight: 600; }
+
+    label { display: block; margin-bottom: 12px; }
+    .label { display: block; font-size: 12px; font-weight: 500; color: var(--text-2); margin-bottom: 6px; }
+
+    input {
+      width: 100%;
+      padding: 11px 13px;
+      background: var(--surface);
+      border: 1px solid var(--border-s);
+      border-radius: var(--r-s);
+      color: var(--text);
+      font: inherit;
+      font-size: 15px;
+      transition: border-color .18s, background .18s, box-shadow .18s;
+    }
+    input::placeholder { color: #64707f; }
+    input:hover { background: var(--surface-h); }
+    input:focus {
+      outline: none;
+      border-color: var(--violet);
+      background: var(--surface-h);
+      box-shadow: 0 0 0 3px rgba(124,58,237,.22);
+    }
+
+    button {
+      width: 100%;
+      margin-top: 6px;
+      padding: 12px 16px;
+      border: 0;
+      border-radius: var(--r-s);
+      background: var(--violet);
+      color: #fff;
+      font: inherit;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      transition: background .18s, transform .12s;
+    }
+    button:hover:not(:disabled) { background: #6d28d9; }
+    button:active:not(:disabled) { transform: translateY(1px); }
+    button:disabled { cursor: progress; background: #4c2a8f; }
+    button:focus-visible { outline: 2px solid var(--violet-l); outline-offset: 2px; }
+
+    .note { margin-top: 14px; font-size: 12px; line-height: 1.5; color: var(--text-2); }
+    .note a { color: var(--violet-l); }
+
+    .alert {
+      display: flex;
+      gap: 9px;
+      margin-top: 16px;
+      padding: 11px 13px;
+      border-radius: var(--r-s);
+      background: rgba(248,113,113,.1);
+      border: 1px solid rgba(248,113,113,.32);
+      font-size: 12px;
+      line-height: 1.5;
+      color: #fecaca;
+    }
+    .alert svg { flex: none; margin-top: 1px; color: var(--err); }
+    .alert[hidden] { display: none; }
+
+    .foot {
+      padding: 16px 28px 22px;
+      text-align: center;
+      font-size: 12px;
+      color: #6b7686;
+    }
+
+    .swap { animation: swap .32s cubic-bezier(.16,1,.3,1); }
+    @keyframes swap { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    @media (max-width: 520px) {
+      .topbar { padding: 14px 18px; }
+      .stage { padding: 12px 14px 36px; }
+      .file { padding: 20px 18px 18px; }
+      .body { padding: 20px 18px 22px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <div class="logo-mark" aria-hidden="true"></div>
+    GitDrive
+  </div>
+
+  <div class="stage">
+    <main class="panel">
+      <div class="file">
+        <div class="glyph" id="glyph" aria-hidden="true"></div>
+        <div>
+          <h1 class="fname" id="fname">…</h1>
+          <p class="fmeta">
+            <span id="size">—</span>
+            <span class="dot">·</span>
+            <span id="chunks" class="mono"></span>
+          </p>
+        </div>
+      </div>
+
+      <div class="body">
+        <div id="view"></div>
+        <p class="alert" id="alert" role="alert" hidden></p>
+      </div>
+    </main>
+  </div>
+
+  <p class="foot">Shared through GitDrive · storage stays on GitHub</p>
+
+  <script type="application/json" id="share-data">__SHARE_DATA__</script>
+  <script>
+    const data = JSON.parse(document.getElementById('share-data').textContent);
+
+    const ICON_FILE = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+    const ICON_LOCK = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>';
+    const ICON_WARN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.3v.2"/></svg>';
+    const ICON_DOWN = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M5 19h14"/></svg>';
+
+    const view  = document.getElementById('view');
+    const alertBox = document.getElementById('alert');
+    const nativeFetch = window.fetch.bind(window);
+
+    function fmtSize(n) {
+      if (n < 1024)        return n + ' B';
+      if (n < 1048576)     return (n / 1024).toFixed(1) + ' KB';
+      if (n < 1073741824)  return (n / 1048576).toFixed(1) + ' MB';
+      return (n / 1073741824).toFixed(2) + ' GB';
+    }
+
+    function showError(message) {
+      alertBox.innerHTML = ICON_WARN + '<span></span>';
+      alertBox.querySelector('span').textContent = message;
+      alertBox.hidden = false;
+    }
+
+    function clearError() {
+      alertBox.hidden = true;
+      alertBox.textContent = '';
+    }
+
+    function api(path, init = {}) {
+      const headers = new Headers(init.headers || {});
+      const token = localStorage.getItem('gitdrive_token');
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      return nativeFetch(path, { ...init, headers });
+    }
+
+    async function startDownload(button) {
+      clearError();
+      const resting = button.innerHTML;
+      button.disabled = true;
+      button.textContent = 'Preparing your download…';
+      let navigating = false;
+      try {
+        const res = await api(`/share/${data.token}/access`, { method: 'POST' });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showError(body.detail || 'This file is not available right now.');
+          return;
+        }
+        navigating = true;
+        window.location.href = body.url;
+        button.textContent = 'Starting download…';
+      } catch {
+        showError('Could not reach GitDrive. Check your connection and try again.');
+      } finally {
+        if (!navigating) {
+          button.disabled = false;
+          button.innerHTML = resting;
+        }
+      }
+    }
+
+    function renderReady() {
+      view.innerHTML = `
+        <h2>${data.isPrivate ? 'Ready to download' : 'Ready when you are'}</h2>
+        <p class="lede">${data.isPrivate
+          ? `This file is private to its owner${data.username ? `, and you are signed in as ${esc(data.username)}` : ''}.`
+          : 'This file is public, so the link is all you need.'}</p>
+        <button class="swap" id="go" type="button">${ICON_DOWN}<span>Download</span></button>
+        <p class="note">Anyone with this link can reach this page, so send it only to the people you want to see the file.</p>
+      `;
+      view.querySelector('#go').onclick = e => startDownload(e.currentTarget);
+    }
+
+    function renderSignIn() {
+      view.innerHTML = `
+        <h2>Sign in to download</h2>
+        <p class="lede">This file is private. Sign in with an account it was shared with.</p>
+        <form id="signin" novalidate>
+          <label><span class="label">Username</span>
+            <input id="u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+          </label>
+          <label><span class="label">Password</span>
+            <input id="p" name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit" id="go">Sign in &amp; download</button>
+        </form>
+        <p class="note">No account yet? <a href="/">Create one on GitDrive</a>, then ask the sender to share this file with it.</p>
+      `;
+      const form = view.querySelector('#signin');
+      form.onsubmit = async e => {
+        e.preventDefault();
+        clearError();
+        const button = form.querySelector('#go');
+        button.disabled = true;
+        button.textContent = 'Signing in…';
+        try {
+          const body = new FormData();
+          body.append('username', form.username.value.trim());
+          body.append('password', form.password.value);
+          const res = await api('/auth/login', { method: 'POST', body });
+          const out = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showError(out.detail || 'That username and password do not match an account.');
+            form.password.value = '';
+            form.password.focus();
+            return;
+          }
+          localStorage.setItem('gitdrive_token', out.token);
+          localStorage.setItem('gitdrive_username', out.username);
+          data.username = out.username;
+          renderReady();
+          await startDownload(view.querySelector('#go'));
+        } catch {
+          showError('Could not reach GitDrive. Check your connection and try again.');
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Sign in & download';
+        }
+      };
+      if (window.matchMedia('(hover: hover) and (pointer: fine)').matches) form.username.focus();
+    }
+
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    document.getElementById('glyph').innerHTML = data.isPrivate ? ICON_LOCK : ICON_FILE;
+    document.getElementById('fname').textContent = data.filename;
+    document.getElementById('size').textContent  = fmtSize(data.size);
+    document.getElementById('chunks').textContent = data.chunkCount + (data.chunkCount === 1 ? ' chunk' : ' chunks');
+    document.title = data.filename + ' · GitDrive';
+
+    if (data.expired) showError('That download link had expired, so a fresh one is ready below.');
+    data.authorized ? renderReady() : renderSignIn();
+  </script>
+</body>
+</html>

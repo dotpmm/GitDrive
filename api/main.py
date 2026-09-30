@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 import mimetypes
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile, status
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 
 from . import db
 from .github import GitHubClient
@@ -23,29 +24,46 @@ load_dotenv()
 _key_src = os.getenv("GITHUB_TOKEN")
 _aes_key = hashlib.sha256(_key_src.encode()).digest()
 
-def _encryption_key(user: dict, visibility: str) -> bytes:
-    # The per-user UUID is stored only in MongoDB and is never included in API output.
-    scope = "public" if visibility == "public" else user["encryption_id"]
+def _encryption_key(user: dict | None, visibility: str) -> bytes:
+    # per-user UUID is stored only in MongoDB
+    if visibility == "public":
+        # public blobs must be readable by whoever holds the link, so they are
+        # scoped by a constant rather than by an uploader, so, maybe a server binded 
+        # link
+        scope = "public"
+    elif user:
+        scope = user["encryption_id"]
+    else:
+        raise ValueError("private files require the uploader's key material")
     return hashlib.sha256(_aes_key + scope.encode()).digest()
 
 def _encrypt(data: bytes, user: dict, visibility: str) -> bytes:
     nonce = os.urandom(12)
     return nonce + AESGCM(_encryption_key(user, visibility)).encrypt(nonce, data, None)
 
-def _decrypt(data: bytes, user: dict | None = None, visibility: str = "public") -> bytes:
-    # this was needed, cuz so of my older
-    # files were not encrypted so, while dowloading them
-    # u dont get anything by decrypting them lmao
-    # empty string resp
-    try:
-        key = _encryption_key(user, visibility) if user else _aes_key
-        return AESGCM(key).decrypt(data[:12], data[12:], None)
-    except Exception:
-        # Compatibility for blobs written before user-scoped encryption.
+def _decrypt_keys(user: dict | None, visibility: str) -> list[bytes]:
+    keys = []
+    if visibility == "public" or user:
+        keys.append(_encryption_key(user, visibility))
+    # blobs written before keys were scoped per user are keyed by the bare master key, this is 
+    # the leftovers of the old version
+    keys.append(_aes_key)
+    return keys
+
+def _decrypt(data: bytes, user: dict | None, visibility: str, expected_size: int | None) -> bytes:
+    # decryption used to fall back to returning the stored bytes, which handed the
+    # client an encrypted blob while the response advertised the plaintext size;
+    for key in _decrypt_keys(user, visibility):
         try:
-            return AESGCM(_aes_key).decrypt(data[:12], data[12:], None)
+            plain = AESGCM(key).decrypt(data[:12], data[12:], None)
         except Exception:
-            return data
+            continue
+        if expected_size is None or len(plain) == expected_size:
+            return plain
+    # compatibility for blobs stored before encryption was enabled at all.
+    if expected_size is not None and len(data) == expected_size:
+        return data
+    raise ValueError("stored object could not be decrypted")
 
 _log_level = logging.DEBUG if os.getenv("LOG_MODE").lower() == "debug" else logging.INFO
 
@@ -262,6 +280,9 @@ async def logout(authorization: str | None = Header(default=None)) -> dict:
 async def root() -> HTMLResponse:
     return HTMLResponse(content=(Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8"))
 
+def _asset(name: str) -> str:
+    return (Path(__file__).resolve().parent.parent / name).read_text(encoding="utf-8")
+
 # BIGGEST PERFORMANCE UPDATE
 # with this producer-consumer pipeline,
 # ive decreased the overall upload time by almost 40% 
@@ -401,42 +422,60 @@ def _session_user(authorization: str | None) -> dict | None:
     return db.find_session_user(authorization.removeprefix("Bearer ")) if authorization and authorization.startswith("Bearer ") else None
 
 
-def _download_response(record: dict, decrypting_user: dict | None) -> Response | StreamingResponse:
+def _stream_file(record: dict) -> Response | StreamingResponse:
 
     repo     = record["repo"]
     filename = record["original_filename"]
+    visibility = record.get("visibility", "public")
     # Private chunks are keyed to the uploader.  Access is still checked before this
     # point; collaborators never receive the uploader's UUID or encryption key.
-    key_user = db.find_user(record["owner_username"]) if record.get("visibility") == "private" else None
+    key_user = db.find_user(record["owner_username"]) if visibility == "private" else None
     headers  = {
         "Content-Disposition": f'attachment; filename="{filename}"',
         "Content-Length":      str(record["size_bytes"]),
+        "X-Content-Type-Options": "nosniff",
     }
+    chunks = sorted(record.get("chunks") or [], key=lambda c: c["index"])
+    if not chunks:
+        raise HTTPException(status_code=502, detail="Stored file metadata is incomplete")
     log.info("DOWNLOAD INIT sha=%.12s file=%r chunked=%s", record["sha256"], filename, record.get("is_chunked"))
 
-    if record.get("is_chunked"):
-        chunks = sorted(record["chunks"], key=lambda c: c["index"])
-        log.debug("STREAM %d chunks  repo=%s", len(chunks), repo)
+    def _fetch(chunk: dict) -> bytes:
+        enc_data = _github.download_file(repo=repo, path=_object_path(chunk["sha256"]))
+        expected = chunk.get("size")
+        if expected is None and len(chunks) == 1:
+            expected = record["size_bytes"]
+        return _decrypt(enc_data, key_user, visibility, expected)
 
-        def _iter_chunks():
-            for c in chunks:
-                log.debug("FETCH CHUNK idx=%d sha=%.12s", c["index"], c["sha256"])
-                enc_data = _github.download_file(repo=repo, path=_object_path(c["sha256"]))
-                yield _decrypt(enc_data, key_user, record.get("visibility", "public"))
-
-        return StreamingResponse(_iter_chunks(), media_type=record["mime_type"], headers=headers)
-
+    # The first chunk is fetched here, before any header is sent.  A storage
+    # failure inside the streaming generator would otherwise reach the client as
+    # a response cut off mid-file, which is what a proxy reports as 502.
     try:
-        log.debug("FETCH SINGLE sha=%.12s", record["sha256"])
-        storage_sha = record["chunks"][0]["sha256"]
-        enc_data = _github.download_file(repo=repo, path=_object_path(storage_sha))
-        data = _decrypt(enc_data, key_user, record.get("visibility", "public"))
+        log.debug("FETCH CHUNK idx=0 sha=%.12s", chunks[0]["sha256"])
+        first = _fetch(chunks[0])
     except Exception as exc:
         log.error("DOWNLOAD ERROR sha=%.12s err=%s", record["sha256"], exc)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=502, detail="The file could not be read from storage, please try again") from exc
 
-    log.info("DOWNLOAD SUCCESSFUL sha=%.12s size=%dB", record["sha256"], len(data))
-    return Response(content=data, media_type=record["mime_type"], headers=headers)
+    if len(chunks) == 1:
+        log.info("DOWNLOAD SUCCESSFUL sha=%.12s size=%dB", record["sha256"], len(first))
+        return Response(content=first, media_type=record["mime_type"], headers=headers)
+
+    log.debug("STREAM %d chunks  repo=%s", len(chunks), repo)
+
+    def _iter_rest():
+        yield first
+        for c in chunks[1:]:
+            try:
+                log.debug("FETCH CHUNK idx=%d sha=%.12s", c["index"], c["sha256"])
+                yield _fetch(c)
+            except Exception as exc:
+                # The status line is long gone, so the only honest signal left is to
+                # abort the transfer rather than serve a silently short file.
+                log.error("DOWNLOAD STREAM FAILED sha=%.12s idx=%d err=%s", record["sha256"], c["index"], exc)
+                raise
+
+    return StreamingResponse(_iter_rest(), media_type=record["mime_type"], headers=headers)
 
 
 @app.get("/download/{file_sha256}", response_model=None)
@@ -447,7 +486,7 @@ async def download_file(file_sha256: str, authorization: str | None = Header(def
     user = _session_user(authorization)
     if not _can_access(record, user):
         raise HTTPException(status_code=403, detail="You do not have access to this private file")
-    return _download_response(record, user if record.get("visibility") == "private" else None)
+    return _stream_file(record)
 
 
 @app.post("/files/{file_sha256}/collaborators")
@@ -472,13 +511,77 @@ async def create_share_link(file_sha256: str, user: dict = Depends(current_user)
     return {"token": token, "visibility": record.get("visibility", "private")}
 
 
-@app.get("/share/{token}/download", response_model=None)
-async def download_shared_file(token: str, authorization: str | None = Header(default=None)) -> Response | StreamingResponse:
+def _shared_file(token: str) -> dict:
     share = db.find_share(token)
     record = db.find_by_sha256(share["file_sha256"]) if share else None
     if not record:
         raise HTTPException(status_code=404, detail="Share link not found")
+    return record
+
+
+def _wants_html(request: Request) -> bool:
+    return "text/html" in request.headers.get("accept", "")
+
+
+@app.get("/share/d/{ticket}", response_model=None)
+async def download_by_ticket(ticket: str, request: Request) -> Response | StreamingResponse:
+    grant = db.find_download_ticket(ticket)
+    if not grant:
+        # it shld never show a JSON error inside a download, so send browsers back to
+        # the share link to mint a fresh ticket.
+        if _wants_html(request):
+            share_token = db.find_ticket_share(ticket)
+            if share_token:
+                return RedirectResponse(url=f"/share/{share_token}", status_code=302)
+        raise HTTPException(status_code=404, detail="This download link has expired, open the share link again")
+    record = db.find_by_sha256(sha256=grant["file_sha256"])
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    return _stream_file(record)
+
+
+@app.get("/share/{token}", response_class=HTMLResponse)
+async def share_page(token: str, request: Request, authorization: str | None = Header(default=None)) -> HTMLResponse:
+    record = _shared_file(token)
     user = _session_user(authorization)
-    if share["visibility"] == "private" and not _can_access(record, user):
+    payload = {
+        "token":      token,
+        "filename":   record["original_filename"],
+        "size":       record["size_bytes"],
+        "mime":       record["mime_type"],
+        "chunkCount": len(record.get("chunks") or []),
+        "isPrivate":  record.get("visibility") == "private",
+        "authorized": _can_access(record, user),
+        "username":   user["username"] if user else None,
+        "expired":    request.query_params.get("expired") == "1",
+    }
+    page = _asset("share.html").replace("__SHARE_DATA__", json.dumps(payload).replace("</", "<\\/"))
+    return HTMLResponse(
+        content=page,
+        # NO SHARED CACHE: page carries the share token, so it must never sit in a shared cache.
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/share/{token}/access")
+async def share_access(token: str, authorization: str | None = Header(default=None)) -> dict:
+    record = _shared_file(token)
+    user = _session_user(authorization)
+    if record.get("visibility") == "private" and not _can_access(record, user):
+        raise HTTPException(status_code=401, detail="Sign in with an account this file is shared with")
+    grant, expires_at = db.create_download_ticket(record["sha256"], token)
+    return {"url": f"/share/d/{grant}", "expires_in": db.TICKET_TTL_SECONDS}
+
+
+@app.get("/share/{token}/download", response_model=None)
+async def download_shared_file(token: str, request: Request, authorization: str | None = Header(default=None)) -> Response | StreamingResponse:
+    record = _shared_file(token)
+    user = _session_user(authorization)
+    if record.get("visibility") == "private" and not _can_access(record, user):
+        # got rid of that JSON body saying "sign in to download"
+        # now it directly opens the sign in page
+        if not authorization and _wants_html(request):
+            return RedirectResponse(url=f"/share/{token}", status_code=302)
         raise HTTPException(status_code=403, detail="Sign in with an account this file is shared with")
-    return _download_response(record, user if record.get("visibility") == "private" else None)
+    return _stream_file(record)
+
