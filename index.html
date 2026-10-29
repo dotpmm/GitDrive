@@ -14,7 +14,14 @@
       if (t) document.documentElement.dataset.theme = t;
     } catch (e) {}
   </script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+          integrity="sha384-acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"
+          crossorigin="anonymous" referrerpolicy="no-referrer" defer></script>
+  <!-- Argon2id for the browser: the only part of the format Web Crypto does not provide. -->
+  <script src="https://cdn.jsdelivr.net/npm/hash-wasm@4.12.0/dist/argon2.umd.min.js"
+          integrity="sha384-dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094"
+          crossorigin="anonymous" referrerpolicy="no-referrer" defer></script>
+  <script src="/gitdrive-crypto.js" defer></script>
   <style>
     /* ------------------------------------------------------------------ *
      * Design tokens
@@ -664,6 +671,10 @@
     /* Table ---------------------------------------------------------- */
     .table-wrap { overflow: hidden; border-radius: var(--r-xl); }
     table { width: 100%; border-collapse: collapse; }
+    th.col-size   { width: 110px; }
+    th.col-hash   { width: 160px; }
+    th.col-chunks { width: 92px; }
+    th.col-actions { width: 1%; }
     thead { background: var(--surface-2); }
     th {
       padding: 12px 20px;
@@ -694,6 +705,15 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .fsz { color: var(--text-2); font-size: 13.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+    /* Shown instead of the hidden columns on narrow screens. */
+    .row-meta {
+      display: none;
+      padding-left: 25px;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--text-3);
+    }
 
     .fsha {
       display: inline-flex;
@@ -837,10 +857,15 @@
       display: grid;
       place-items: center;
       padding: 20px;
-      background: var(--bg);
       overflow: auto;
+      background-color: var(--bg);
+      background-image:
+        radial-gradient(900px 520px at 20% 0%,   var(--bg-tint-a), transparent 60%),
+        radial-gradient(760px 480px at 90% 100%, var(--bg-tint-b), transparent 60%);
     }
     .auth-gate.hidden { display: none; }
+    /* Reused for the unlock prompt, which looks the same but is not a sign-in. */
+    .auth-gate.unlock { z-index: 900; }
 
     .auth-card {
       width: min(400px, 100%);
@@ -896,6 +921,9 @@
     }
     .reveal-btn:hover { color: var(--text); background: var(--surface-hi); }
     .reveal-btn .icon { width: 17px; height: 17px; }
+    .reveal-btn .icon-eye-off { display: none; }
+    .reveal-btn.showing .icon-eye { display: none; }
+    .reveal-btn.showing .icon-eye-off { display: block; }
 
     .auth-submit { width: 100%; min-height: 44px; margin-top: 6px; font-size: 15px; }
 
@@ -914,17 +942,29 @@
      * ------------------------------------------------------------------ */
     @media (max-width: 720px) {
       .user-name { display: none; }
-      th.col-hash, td.col-hash, th.col-chunks, td.col-chunks { display: none; }
+      th.col-hash, td.col-hash, th.col-chunks, td.col-chunks, th.col-size, td.col-size { display: none; }
       td, th { padding-left: 16px; padding-right: 16px; }
-      .row-actions { justify-content: flex-start; }
-      td.col-actions { text-align: left; }
+      .row-meta { display: block; }
+      tr.folder-row .row-meta { padding-left: 24px; }
+      tr.folder-item > td:first-child { padding-left: 28px; }
+      tr.folder-item .row-meta { padding-left: 49px; }
+      .row-actions { justify-content: flex-end; }
+      td.col-actions { text-align: right; }
       .search { min-width: 0; width: 100%; }
       .visibility { flex-direction: column; align-items: flex-start; gap: 10px; }
     }
+
+    @media (max-width: 560px) {
+      /* Icon-only actions keep every touch target at 34px without wrapping rows. */
+      .row-actions .btn span { display: none; }
+      .row-actions .btn { width: 34px; padding: 0; }
+      .row-actions .icon { width: 17px; height: 17px; }
+    }
+
     @media (max-width: 460px) {
       .brand span { display: none; }
-      th.col-size, td.col-size { display: none; }
       .summary { grid-template-columns: 1fr 1fr; }
+      .stat-value { font-size: 22px; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1033,11 +1073,31 @@
       <input id="authPassword" name="password" autocomplete="current-password" type="password" placeholder="Password (8+ characters)" required>
       <button class="reveal-btn" type="button" id="revealPassword" aria-label="Show password">
         <svg class="icon icon-eye" aria-hidden="true"><use href="#i-eye"/></svg>
-        <svg class="icon icon-eye-off" aria-hidden="true" hidden><use href="#i-eye-off"/></svg>
+        <svg class="icon icon-eye-off" aria-hidden="true"><use href="#i-eye-off"/></svg>
       </button>
     </div>
     <button id="authSubmit" class="btn btn-primary auth-submit" type="submit">Sign in</button>
     <div class="auth-switch" id="authSwitch" role="button" tabindex="0">Need an account? Create one</div>
+  </form>
+</div>
+
+<!-- Unlock (private-space key derivation) ------------------------------------ -->
+<div class="auth-gate unlock hidden" id="unlockGate">
+  <form class="auth-card" id="unlockForm" autocomplete="off">
+    <div class="auth-logo"><svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg></div>
+    <h1>Unlock your private files</h1>
+    <p id="unlockText">Your password never leaves this device. It is turned into a decryption
+       key here in your browser, then discarded.</p>
+    <div class="field">
+      <label class="visually-hidden" for="unlockPassword">Password</label>
+      <input id="unlockPassword" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+      <button class="reveal-btn" type="button" id="unlockReveal" aria-label="Show password">
+        <svg class="icon icon-eye" aria-hidden="true"><use href="#i-eye"/></svg>
+        <svg class="icon icon-eye-off" aria-hidden="true"><use href="#i-eye-off"/></svg>
+      </button>
+    </div>
+    <button id="unlockSubmit" class="btn btn-primary auth-submit" type="submit">Unlock</button>
+    <p class="visibility-hint" id="unlockError" style="color:var(--err);margin-top:12px"></p>
   </form>
 </div>
 
@@ -1110,7 +1170,7 @@
         <span><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg>Public</span>
       </label>
     </div>
-    <span class="visibility-hint" id="visibilityHint">Only you and the collaborators you add can open these files.</span>
+    <span class="visibility-hint" id="visibilityHint">Encrypted in your browser before upload. The server never sees your password or the file.</span>
   </section>
 
   <section class="upload-card glass reveal d2" id="uploadCard" aria-live="polite">
@@ -1174,11 +1234,97 @@
 
 <script>
   const CHUNK_SIZE = 10 * 1024 * 1024;
+  const GD = window.GDCrypto;
   let allFiles = [];
   let registering = false;
 
+  /* K_root lives here and nowhere else: never localStorage, never a request body.
+     Losing it is what "sign out" means for private files. */
+  let K_ROOT = null;
+  let KDF_PARAMS = null;
+
   const $ = (id) => document.getElementById(id);
   const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+
+  /* ------------------------------------------------------------------ *
+   * Key management
+   * ------------------------------------------------------------------ */
+
+  // Argon2id at 64 MiB blocks the main thread for a moment, so it is deliberately not run
+  // inline: the caller yields first so the "Deriving key…" state actually paints.
+  async function deriveRoot(password, saltHex, params) {
+    $('unlockError').textContent = '';
+    const button = $('unlockSubmit');
+    const restore = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Deriving key…';
+    try {
+      // Yield once so the "Deriving key…" state actually paints before Argon2id runs.
+      await new Promise((r) => setTimeout(r, 16));
+      return await GD.deriveKRoot(password, saltHex, params);
+    } finally {
+      button.disabled = false;
+      button.textContent = restore;
+    }
+  }
+
+  async function fetchKdf(username) {
+    const r = await fetch(`/auth/kdf?username=${encodeURIComponent(username)}&t=${Date.now()}`);
+    if (!r.ok) throw new Error('Could not read the key derivation parameters');
+    return r.json();
+  }
+
+  let unlockResolve = null;
+  function askPassword() {
+    if (K_ROOT) return Promise.resolve(K_ROOT);
+    $('unlockGate').classList.remove('hidden');
+    $('unlockPassword').value = '';
+    $('unlockPassword').focus();
+    return new Promise((resolve) => { unlockResolve = resolve; });
+  }
+
+  function closeUnlock(cancelled) {
+    $('unlockGate').classList.add('hidden');
+    $('unlockPassword').value = '';
+    const resolve = unlockResolve;
+    unlockResolve = null;
+    if (resolve) resolve(cancelled ? null : K_ROOT);
+  }
+
+  $('unlockGate').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && unlockResolve) closeUnlock(true);
+  });
+
+  $('unlockReveal').addEventListener('click', () => {
+    const input = $('unlockPassword');
+    const show  = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    $('unlockReveal').classList.toggle('showing', show);
+    $('unlockReveal').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    input.focus();
+  });
+
+  $('unlockForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const password = $('unlockPassword').value;
+    if (!password || !KDF_PARAMS) return;
+    try {
+      K_ROOT = await deriveRoot(password, KDF_PARAMS.salt, KDF_PARAMS);
+    } catch (err) {
+      $('unlockError').textContent = err.message || 'Could not derive a key from that password';
+      return;
+    }
+    closeUnlock(false);
+  });
+
+  // Wraps any private-space action: makes sure a key exists, then runs it.
+  async function withKeys(fn) {
+    if (!K_ROOT) {
+      await askPassword();
+      if (!K_ROOT) { toast('That password could not unlock this account', 'err'); return null; }
+    }
+    return fn();
+  }
 
   /* ------------------------------------------------------------------ *
    * Auth
@@ -1195,11 +1341,12 @@
     registering = register;
     $('authTitle').textContent = register ? 'Create your GitDrive account' : 'Welcome to GitDrive';
     $('authText').textContent  = register
-      ? 'Your account keeps private files and encryption scoped to you.'
+      ? 'Your password unlocks your private files. It is never sent to the server, so nobody — including us — can recover it.'
       : 'Sign in to access your files and shared content.';
     $('authSubmit').textContent = register ? 'Create account' : 'Sign in';
     $('authSwitch').textContent = register ? 'Already have an account? Sign in' : 'Need an account? Create one';
     $('authPassword').setAttribute('autocomplete', register ? 'new-password' : 'current-password');
+    if (register) $('authPassword').setAttribute('minlength', '8');
   }
 
   $('authSwitch').addEventListener('click', () => setAuthMode(!registering));
@@ -1211,23 +1358,57 @@
     const input = $('authPassword');
     const show  = input.type === 'password';
     input.type = show ? 'text' : 'password';
-    $('revealPassword').querySelector('.icon-eye').hidden    = show;
-    $('revealPassword').querySelector('.icon-eye-off').hidden = !show;
+    $('revealPassword').classList.toggle('showing', show);
     $('revealPassword').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
     input.focus();
   });
 
-  $('authForm').addEventListener('submit', async (e) => {
+  // Registering and signing in are the same operation for the server: both receive a
+  // password-derived verifier, never the password and never a key.
+  async function authenticate(path, username, password, extra) {
+    const button = $('authSubmit');
+    const restore = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Deriving key…';
+    try {
+      const kdf = registering
+        ? { alg: 'argon2id', salt: GD.randomHex(16), m_kib: GD.ARGON2_M_KIB,
+            t: GD.ARGON2_T, p: GD.ARGON2_P, len: GD.KEY_LEN }
+        : await fetchKdf(username);
+
+      await new Promise((r) => setTimeout(r, 16));   // let the button state paint
+      const root = await GD.deriveKRoot(password, kdf.salt, kdf);
+
+      const form = new FormData();
+      form.append('username', username);
+      form.append('verifier', await GD.authVerifier(root));
+      Object.entries(extra || {}).forEach(([k, v]) => form.append(k, v));
+      if (registering) form.append('kdf_salt', kdf.salt);
+
+      const res  = await fetch(path, { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Could not sign in');
+
+      K_ROOT = root;                 // kept in memory only
+      KDF_PARAMS = kdf;
+      localStorage.setItem('gitdrive_token', data.token);
+      localStorage.setItem('gitdrive_username', data.username);
+      $('authPassword').value = '';
+      showApp(data.username);
+    } catch (err) {
+      toast(err.message || 'Could not sign in', 'err');
+    } finally {
+      button.disabled = false;
+      button.textContent = restore;
+    }
+  }
+
+  $('authForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const form = new FormData();
-    form.append('username', $('authUsername').value);
-    form.append('password', $('authPassword').value);
-    const res  = await fetch(registering ? '/auth/register' : '/auth/login', { method: 'POST', body: form });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return toast(data.detail || 'Could not sign in', 'err');
-    localStorage.setItem('gitdrive_token', data.token);
-    localStorage.setItem('gitdrive_username', data.username);
-    showApp(data.username);
+    const username = $('authUsername').value.trim();
+    if (!username) return;
+    authenticate(registering ? '/auth/register' : '/auth/login',
+                username, $('authPassword').value);
   });
 
   function showApp(username) {
@@ -1238,11 +1419,14 @@
     loadFiles();
   }
 
+  // Signing out also forgets the key, which is the point: it is not recoverable.
   async function logout() {
     await fetch('/auth/logout', { method: 'POST' });
     localStorage.removeItem('gitdrive_token');
     localStorage.removeItem('gitdrive_username');
     allFiles = [];
+    K_ROOT = null;
+    KDF_PARAMS = null;
     $('userMenu').hidden = true;
     $('authGate').classList.remove('hidden');
     setAuthMode(false);
@@ -1319,8 +1503,16 @@
   async function loadFiles() {
     try {
       allFiles = await fetch(`/files?t=${Date.now()}`).then(r => r.json());
-      renderFiles(allFiles);
+      renderFiles();
       updateStats();
+      // Names for private files only exist once the key is back; ask, then fill them in.
+      const pending = allFiles.some((f) => f.mode === 'private' && !f.original_filename);
+      if (pending && !K_ROOT) {
+        const unlocked = await askPassword();
+        if (unlocked) resolvePrivateNames();
+      } else {
+        resolvePrivateNames();
+      }
       const autoFolder = new URLSearchParams(window.location.search).get('folder');
       if (autoFolder) {
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -1343,17 +1535,27 @@
   }
 
   async function downloadFolder(folderName) {
-    const filesToDownload = allFiles.filter(f => f.relative_path && f.relative_path.startsWith(folderName + '/'));
+    const filesToDownload = allFiles.filter(f => displayPath(f) && displayPath(f).startsWith(folderName + '/'));
     if (!filesToDownload.length) return;
+    if (filesToDownload.some((f) => f.mode === 'private') && !K_ROOT) {
+      await askPassword();
+      if (!K_ROOT) return toast('A password is needed to decrypt that folder', 'err');
+      resolvePrivateNames();
+    }
     toast(`Downloading folder "${folderName}" (${filesToDownload.length} files)…`);
     const zip = new JSZip();
     for (const f of filesToDownload) {
       try {
-        const res = await fetch(`/download/${f.sha256}`);
-        if (!res.ok) throw new Error(`Status ${res.status}`);
-        zip.file(f.relative_path, await res.blob());
+        if (f.mode === 'private') {
+          const meta = await privateParts(f.file_id);
+          zip.file(displayPath(f) || displayName(f), new Blob([meta]));
+        } else {
+          const res = await fetch(`/download/${f.file_id}`);
+          if (!res.ok) throw new Error(`Status ${res.status}`);
+          zip.file(displayPath(f) || displayName(f), await res.blob());
+        }
       } catch (e) {
-        toast(`Failed to fetch ${f.original_filename}: ${e.message}`, 'err');
+        toast(`Failed to fetch ${displayName(f)}: ${e.message}`, 'err');
         return;
       }
     }
@@ -1366,6 +1568,25 @@
     } catch (e) {
       toast(`Failed to create ZIP: ${e.message}`, 'err');
     }
+  }
+
+  // Same walk as downloadPrivate, minus the save: returns the assembled bytes.
+  async function privateParts(fileId) {
+    const manifest = await fetch(`/files/${fileId}/manifest`).then((r) => {
+      if (!r.ok) throw new Error(`manifest ${r.status}`);
+      return r.json();
+    });
+    const { dekHex, meta } = await GD.openManifest(manifest, K_ROOT);
+    const ordered = [...meta.chunks].sort((a, b) => a.index - b.index);
+    const parts = [];
+    for (const c of ordered) {
+      const blob = new Uint8Array(await fetch(`/files/${fileId}/chunk/${c.index}`)
+        .then((r) => { if (!r.ok) throw new Error(`chunk ${r.status}`); return r.arrayBuffer(); }));
+      const key = GD.hex(await GD.chunkKey(GD.unhex(dekHex), c.index, ordered.length));
+      const open = await GD.openChunk(fileId, blob, key, { index: c.index, total: ordered.length });
+      parts.push(open.plain);
+    }
+    return parts;
   }
 
   function copyToClipboard(text) {
@@ -1387,30 +1608,18 @@
     return Promise.resolve();
   }
 
-  async function shareFile(sha) {
-    const res  = await fetch(`/files/${sha}/share`, { method: 'POST' });
+  async function shareFile(fileId) {
+    const res  = await fetch(`/files/${fileId}/share`, { method: 'POST' });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return toast(data.detail || 'Could not create share link', 'err');
-    // The share page, not the raw file endpoint: it is the only link a recipient
-    // can be shown something useful on, such as a sign-in form.
+    // The share page, not the raw file endpoint: it is the only link a recipient can be
+    // shown something useful on, such as a password prompt.
     const url = `${window.location.origin}/share/${data.token}`;
     copyToClipboard(url).then(() => {
       toast(data.visibility === 'public'
         ? 'Public share link copied!'
-        : 'Private share link copied...recipients must be collaborators.', 'ok');
+        : 'Private link copied — recipients also need your password', 'ok');
     });
-  }
-
-  async function addCollaborator(sha) {
-    const username = prompt('GitDrive username to add as a collaborator:');
-    if (!username) return;
-    const form = new FormData();
-    form.append('username', username.trim());
-    const res  = await fetch(`/files/${sha}/collaborators`, { method: 'POST', body: form });
-    const data = await res.json().catch(() => ({}));
-    toast(res.ok ? `${username} can now access this private file.` : (data.detail || 'Could not add collaborator'),
-          res.ok ? 'ok' : 'err');
-    if (res.ok) loadFiles();
   }
 
   function shareFolder(name) {
@@ -1418,73 +1627,123 @@
     copyToClipboard(url).then(() => toast('Share link copied!', 'ok'));
   }
 
-  // Share links and collaborator lists are owner-only server side, so the buttons
-  // are not drawn for someone else's file: tapping them answered "file not found".
+  // Share links are owner-only server side, so the button is not drawn for someone
+  // else's file: tapping it answered "file not found".
   function isOwner(f) {
     return !!f.owner_username && f.owner_username === localStorage.getItem('gitdrive_username');
   }
 
-  function fileRow(f, folderId) {
-    const sha = f.sha256;
-    const sz  = f.size_bytes || 0;
-    const badge = f.is_chunked
+  // The server cannot read a private filename, so rows render as locked until this
+  // resolves them, which it can only do once the key is back in memory.
+  const displayName = (f) => f.original_filename || 'Encrypted file';
+  const displayPath = (f) => f.relative_path || '';
+
+  async function resolvePrivateNames() {
+    const locked = allFiles.filter((f) => f.mode === 'private' && !f.original_filename);
+    if (!locked.length || !K_ROOT) return;
+    let changed = false;
+    for (const f of locked) {
+      try {
+        const res = await fetch(`/files/${f.file_id}/manifest`);
+        if (!res.ok) continue;
+        const { meta } = await GD.openManifest(await res.json(), K_ROOT);
+        f.original_filename = meta.name || f.original_filename;
+        f.relative_path = meta.path || f.relative_path;
+        changed = true;
+      } catch { /* still locked; the row keeps its placeholder */ }
+    }
+    if (changed) renderFiles(currentFilter());
+  }
+
+  function chunkBadge(f) {
+    return f.is_chunked
       ? `<span class="badge b-chunk">${f.chunk_count}&times;</span>`
       : '<span class="badge b-single">1</span>';
+  }
+
+  // Hidden columns on narrow screens, so the values move under the name.
+  function rowMeta(f, id) {
+    const chunks = f.is_chunked ? `${f.chunk_count} chunks` : '1 chunk';
+    const lock = f.mode === 'private' ? ' · end-to-end' : '';
+    return `${fmt(f.size_bytes || 0)} · ${chunks} · ${id.slice(0, 8)}…${id.slice(-4)}${lock}`;
+  }
+
+  function downloadButton(f, id) {
+    const name = esc(displayName(f));
+    return `<button class="btn" data-action="download" data-id="${esc(id)}"
+      data-name="${name}"
+      data-mode="${esc(f.mode)}"
+      data-mime="${esc(f.mime_type || 'application/octet-stream')}"
+      data-size="${f.size_bytes || 0}"
+      title="Download ${name}" aria-label="Download ${name}">${icon('download')}<span>Download</span></button>`;
+  }
+
+  function actionButton(ico, label, action, attrs) {
+    return `<button class="btn" data-action="${action}" ${attrs}
+      title="${label}" aria-label="${label}">${icon(ico)}<span>${label}</span></button>`;
+  }
+
+  function actionCell(f, id) {
     return `
-      <tr class="folder-item ${folderId}">
+      <td class="col-actions">
+        <div class="row-actions">
+          ${downloadButton(f, id)}
+          ${isOwner(f) ? actionButton('link', 'Share', 'share', `data-id="${esc(id)}"`) : ''}
+        </div>
+      </td>`;
+  }
+
+  function fileRow(f, folderId) {
+    const id = f.file_id;
+    const locked = f.mode === 'private' && !f.original_filename;
+    return `
+      <tr${folderId ? ` class="folder-item ${folderId}"` : ''}>
         <td>
-          <div class="fname" title="${esc(f.original_filename)}">
-            ${icon('file')}<span class="text">${esc(f.original_filename)}</span>
+          <div class="fname" title="${esc(displayName(f))}">
+            ${icon(locked ? 'lock' : 'file')}<span class="text">${esc(displayName(f))}</span>
           </div>
+          <div class="row-meta">${rowMeta(f, id)}</div>
         </td>
-        <td class="fsz col-size">${fmt(sz)}</td>
+        <td class="fsz col-size">${fmt(f.size_bytes || 0)}</td>
         <td class="col-hash">
-          <button class="fsha" data-action="copy-sha" data-sha="${esc(sha)}" title="Copy full SHA-256">
-            ${sha.slice(0, 8)}…${sha.slice(-4)}${icon('copy')}
+          <button class="fsha" data-action="copy-id" data-id="${esc(id)}"
+            title="Copy file ID" aria-label="Copy file ID">
+            ${id.slice(0, 8)}…${id.slice(-4)}${icon('copy')}
           </button>
         </td>
-        <td class="col-chunks">${badge}</td>
-        <td class="col-actions">
-          <div class="row-actions">
-            ${downloadButton(f, sha)}
-            ${isOwner(f) ? actionButton('link', 'Share', 'share', sha) : ''}
-            ${f.visibility === 'private' && isOwner(f) ? actionButton('users', 'Collaborate', 'collab', sha) : ''}
-          </div>
-        </td>
+        <td class="col-chunks">${chunkBadge(f)}</td>
+        ${actionCell(f, id)}
       </tr>
-      <tr class="dl-prog-row" data-sha="${esc(sha)}">
+      <tr class="dl-prog-row" data-id="${esc(id)}">
         <td colspan="5"><div class="dl-bar-track"><div class="dl-bar-fill"></div></div></td>
       </tr>`;
   }
 
-  function downloadButton(f, sha) {
-    return `<button class="btn" data-action="download" data-sha="${esc(sha)}"
-      data-name="${esc(f.original_filename)}"
-      data-mime="${esc(f.mime_type || 'application/octet-stream')}"
-      data-size="${f.size_bytes || 0}">${icon('download')}<span>Download</span></button>`;
-  }
-
-  function actionButton(ico, label, action, sha) {
-    return `<button class="btn" data-action="${action}" data-sha="${esc(sha)}">${icon(ico)}<span>${label}</span></button>`;
+  function currentFilter() {
+    const q = $('searchBox').value.trim().toLowerCase();
+    return q
+      ? allFiles.filter((f) => displayName(f).toLowerCase().includes(q) || f.file_id.includes(q))
+      : allFiles;
   }
 
   function renderFiles(list) {
-    const body = $('filesBody');
-    updateResultCount(list.length);
+    const shown = list || currentFilter();
+    updateResultCount(shown.length);
 
-    if (!list.length) {
+    const body = $('filesBody');
+    if (!shown.length) {
       body.innerHTML = `<tr><td colspan="5"><div class="empty">
         <div class="empty-icon">${icon('folder')}</div>
         <div class="empty-title">${$('searchBox').value ? 'No matches' : 'No files yet'}</div>
-        <div class="empty-sub">${$('searchBox').value ? 'Try a different name or hash.' : 'Drop something above to get started.'}</div>
+        <div class="empty-sub">${$('searchBox').value ? 'Try a different name or id.' : 'Drop something above to get started.'}</div>
       </div></td></tr>`;
       return;
     }
 
     const groups = {};
     const rootFiles = [];
-    list.forEach(f => {
-      const rel = f.relative_path || '';
+    shown.forEach(f => {
+      const rel = displayPath(f);
       if (rel.includes('/')) {
         const folderName = rel.split('/')[0];
         (groups[folderName] ||= []).push(f);
@@ -1499,53 +1758,29 @@
       const filesInFolder = groups[folderName];
       const folderSize = filesInFolder.reduce((sum, f) => sum + (f.size_bytes || 0), 0);
       const folderId = `folder-${index++}`;
+      const folderNameEsc = esc(folderName);
       html += `
         <tr class="folder-row" data-folder-id="${folderId}" data-action="toggle" aria-expanded="false">
           <td colspan="3">
             <button class="folder-toggle" data-action="toggle" data-folder-id="${folderId}" aria-expanded="false">
               <span class="chev">${icon('chevron')}</span>
-              <span class="fname"><span class="text">${esc(folderName)}</span></span>
-              <span class="folder-badge">${filesInFolder.length} files</span>
+              <span class="fname"><span class="text">${folderNameEsc}</span></span>
+              <span class="folder-badge">${filesInFolder.length} ${filesInFolder.length === 1 ? 'file' : 'files'}</span>
             </button>
+            <div class="row-meta">${filesInFolder.length} ${filesInFolder.length === 1 ? 'file' : 'files'} · ${fmt(folderSize)}</div>
           </td>
           <td class="fsz col-size">${fmt(folderSize)}</td>
           <td class="col-actions">
             <div class="row-actions">
-              <button class="btn" data-action="zip" data-folder="${esc(folderName)}">${icon('zip')}<span>Download ZIP</span></button>
-              <button class="btn" data-action="share-folder" data-folder="${esc(folderName)}">${icon('link')}<span>Share</span></button>
+              ${actionButton('zip', 'Download ZIP', 'zip', `data-folder="${folderNameEsc}"`)}
+              ${actionButton('link', 'Share', 'share-folder', `data-folder="${folderNameEsc}"`)}
             </div>
           </td>
         </tr>
         ${filesInFolder.map(f => fileRow(f, folderId)).join('')}`;
     });
 
-    html += rootFiles.map(f => {
-      const sha = f.sha256;
-      const badge = f.is_chunked
-        ? `<span class="badge b-chunk">${f.chunk_count}&times;</span>`
-        : '<span class="badge b-single">1</span>';
-      return `
-        <tr>
-          <td><div class="fname" title="${esc(f.original_filename)}">${icon('file')}<span class="text">${esc(f.original_filename)}</span></div></td>
-          <td class="fsz col-size">${fmt(f.size_bytes || 0)}</td>
-          <td class="col-hash">
-            <button class="fsha" data-action="copy-sha" data-sha="${esc(sha)}" title="Copy full SHA-256">
-              ${sha.slice(0, 8)}…${sha.slice(-4)}${icon('copy')}
-            </button>
-          </td>
-          <td class="col-chunks">${badge}</td>
-          <td class="col-actions">
-            <div class="row-actions">
-              ${downloadButton(f, sha)}
-              ${isOwner(f) ? actionButton('link', 'Share', 'share', sha) : ''}
-              ${f.visibility === 'private' && isOwner(f) ? actionButton('users', 'Collaborate', 'collab', sha) : ''}
-            </div>
-          </td>
-        </tr>
-        <tr class="dl-prog-row" data-sha="${esc(sha)}">
-          <td colspan="5"><div class="dl-bar-track"><div class="dl-bar-fill"></div></div></td>
-        </tr>`;
-    }).join('');
+    html += rootFiles.map(f => fileRow(f)).join('');
 
     body.innerHTML = html;
   }
@@ -1553,12 +1788,11 @@
   /* Row actions, delegated ------------------------------------------------ */
   const ACTIONS = {
     download:     (el) => startDownload(el),
-    share:        (el) => shareFile(el.dataset.sha),
-    collab:       (el) => addCollaborator(el.dataset.sha),
+    share:        (el) => shareFile(el.dataset.id),
     zip:          (el) => downloadFolder(el.dataset.folder),
     'share-folder': (el) => shareFolder(el.dataset.folder),
     toggle:       (el) => toggleFolder(el.closest('tr.folder-row')),
-    'copy-sha':   (el) => copyToClipboard(el.dataset.sha).then(() => toast('SHA-256 copied', 'ok', 2200)),
+    'copy-id':    (el) => copyToClipboard(el.dataset.id).then(() => toast('File ID copied', 'ok', 2200)),
   };
 
   $('filesBody').addEventListener('click', (e) => {
@@ -1568,12 +1802,10 @@
   });
 
   /* Search ---------------------------------------------------------------- */
-  $('searchBox').addEventListener('input', function () {
-    const q = this.value.trim().toLowerCase();
+  $('searchBox').addEventListener('input', () => {
+    const q = $('searchBox').value.trim().toLowerCase();
     $('searchWrap').classList.toggle('filled', q.length > 0);
-    renderFiles(q
-      ? allFiles.filter(f => f.original_filename.toLowerCase().includes(q) || f.sha256.includes(q))
-      : allFiles);
+    renderFiles();
   });
   $('searchClear').addEventListener('click', () => {
     $('searchBox').value = '';
@@ -1583,7 +1815,7 @@
 
   /* Visibility ------------------------------------------------------------ */
   const VISIBILITY_HINT = {
-    private: 'Only you and the collaborators you add can open these files.',
+    private: 'Encrypted in your browser before upload. The server never sees your password or the file.',
     public:  'Anyone with a share link can open these files.',
   };
   document.querySelectorAll('input[name="visibility"]').forEach(input => {
@@ -1646,6 +1878,48 @@
   });
 
   /* Upload ---------------------------------------------------------------- */
+
+  // Everything the private space needs is derived here: a DEK this file will never use
+  // again, and one key per chunk so no AES-GCM key ever sees two nonces.
+  async function privateUploadPlan(file, totalChunks) {
+    const fileId = GD.randomHex(16);
+    const dek = GD.randomHex(GD.KEY_LEN);
+    const plan = {
+      fileId, dek,
+      keys: [],
+      chunks: [],
+      async seal(i, blob) {
+        const plain = new Uint8Array(await blob.arrayBuffer());
+        const key = GD.hex(await GD.chunkKey(GD.unhex(this.dek), i, totalChunks));
+        const sealed = await GD.sealChunk(this.fileId, GD.MODE_PRIVATE, i, totalChunks, key, plain);
+        this.keys[i] = key;
+        this.chunks[i] = { index: i, sha256: await sha256Hex(sealed), size: plain.length };
+        return sealed;
+      },
+      async finish(name, path, mime) {
+        const meta = {
+          name, path, mime,
+          chunks: this.chunks,
+          chain: await GD.chainDigest(this.chunks.map((c) => c.sha256)),
+        };
+        return GD.buildManifest({
+          mode: GD.MODE_PRIVATE, fileId: this.fileId, chunkSize: CHUNK_SIZE,
+          chunkCount: totalChunks, plainSize: file.size,
+          kRoot: K_ROOT, dekHex: this.dek,
+          kdf: { alg: 'argon2id', salt: KDF_PARAMS.salt, m_kib: KDF_PARAMS.m_kib,
+                 t: KDF_PARAMS.t, p: KDF_PARAMS.p, len: GD.KEY_LEN },
+          meta,
+        });
+      },
+    };
+    return plan;
+  }
+
+  async function sha256Hex(bytes) {
+    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+
   function resetCard() {
     const fill     = $('progFill');
     const syncFill = $('syncFill');
@@ -1687,6 +1961,15 @@
   }
 
   async function upload(file, customPath = '') {
+    const visibility = currentVisibility();
+
+    // The private space cannot be uploaded without the key, so ask for it up front rather
+    // than failing three chunks in.
+    if (visibility === 'private' && !K_ROOT) {
+      await askPassword();
+      if (!K_ROOT) return toast('Private uploads need your password', 'err');
+    }
+
     const card = $('uploadCard');
     const fill = $('progFill');
 
@@ -1696,7 +1979,7 @@
     $('progName').textContent  = customPath || file.name;
     $('progLabel').textContent = 'Starting…';
 
-    const uploadId    = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    const uploadId    = crypto.randomUUID
       ? crypto.randomUUID()
       : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
           const r = Math.random() * 16 | 0;
@@ -1704,8 +1987,11 @@
         });
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
     const mime        = file.type || 'application/octet-stream';
-    const visibility  = currentVisibility();
     const startTime   = Date.now();
+    const isPrivate   = visibility === 'private';
+    const plan        = isPrivate ? await privateUploadPlan(file, totalChunks) : null;
+    // One id per file, chosen by the client and never derived from the contents.
+    const fileId      = plan ? plan.fileId : GD.randomHex(16);
     let bytesSentPreviously = 0;
 
     for (let i = 0; i < totalChunks; i++) {
@@ -1716,16 +2002,34 @@
       $('progLabel').textContent = totalChunks > 1 ? `Sending chunk ${i + 1} / ${totalChunks}` : 'Sending…';
       $('progChunk').textContent = totalChunks > 1 ? `${i + 1} of ${totalChunks}` : '';
 
+      let payload = blob;
+      if (isPrivate) {
+        $('progLabel').textContent = `Encrypting in your browser… ${i + 1}/${totalChunks}`;
+        payload = await plan.seal(i, blob);
+      }
+
       const fd = new FormData();
-      fd.append('chunk',         blob, file.name);
+      fd.append('chunk',         payload, file.name);
       fd.append('upload_id',     uploadId);
       fd.append('chunk_index',   i);
       fd.append('total_chunks',  totalChunks);
-      fd.append('filename',      file.name);
-      fd.append('mime_type',     mime);
+      fd.append('file_id',       fileId);
       fd.append('size_bytes',    file.size || 0);
-      fd.append('relative_path', customPath);
       fd.append('visibility',    visibility);
+
+      if (isPrivate) {
+        // Only ciphertext and its hash cross the network. The filename is not sent at all.
+        fd.append('blob_sha',  plan.chunks[i].sha256);
+        fd.append('plain_len', plan.chunks[i].size);
+      } else {
+        fd.append('filename',      file.name);
+        fd.append('mime_type',     mime);
+        fd.append('relative_path', customPath);
+      }
+      if (i === totalChunks - 1 && isPrivate) {
+        const manifest = await plan.finish(file.name, customPath, mime);
+        fd.append('manifest', JSON.stringify(manifest));
+      }
 
       let data;
       try {
@@ -1761,7 +2065,7 @@
 
       if (data.status === 'done') {
         finishUpload('ok', 'Done ✓');
-        toast(`${file.name} uploaded`, 'ok');
+        toast(isPrivate ? `${file.name} encrypted and uploaded` : `${file.name} uploaded`, 'ok');
         return;
       }
 
@@ -1831,17 +2135,86 @@
   }
 
   /* Download -------------------------------------------------------------- */
+
+  function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement('a'), { href: url, download: filename }).click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Public space: the server holds the key, so it hands back plaintext exactly as before.
+  async function downloadPublic(sha256, filename, mimeType, onBytes) {
+    const res = await fetch(`/download/${sha256}`);
+    if (!res.ok) throw new Error(`Download error ${res.status}`);
+
+    const reader = res.body.getReader();
+    const parts = [];
+    while (true) {
+      let c;
+      try { c = await reader.read(); } catch { break; }
+      if (c.done) break;
+      parts.push(c.value);
+      onBytes(parts.reduce((n, p) => n + p.length, 0));
+    }
+    saveBlob(new Blob(parts, { type: mimeType }), filename);
+  }
+
+  // Private space: the server returns ciphertext and a manifest; this is where the file
+  // actually becomes readable again.
+  async function downloadPrivate(fileId, onBytes, onNote) {
+    const manifestRes = await fetch(`/files/${fileId}/manifest`);
+    if (!manifestRes.ok) throw new Error(`Download error ${manifestRes.status}`);
+    const manifest = await manifestRes.json();
+
+    let opened;
+    try {
+      opened = await GD.openManifest(manifest, K_ROOT);
+    } catch (err) {
+      throw new Error('Wrong password, or this file was stored by a different one');
+    }
+    const { dekHex, meta } = opened;
+    const ordered = [...meta.chunks].sort((a, b) => a.index - b.index);
+    onNote(meta.name);
+
+    const parts = [];
+    let received = 0;
+    for (const c of ordered) {
+      const res = await fetch(`/files/${fileId}/chunk/${c.index}`);
+      if (!res.ok) throw new Error(`Chunk ${c.index + 1} failed (${res.status})`);
+      const blob = new Uint8Array(await res.arrayBuffer());
+
+      // Cheap check before spending an AES-GCM open on it; the tag is the real gate.
+      const actual = await sha256Hex(blob);
+      if (actual !== c.sha256) throw new Error(`Chunk ${c.index + 1} does not match the manifest`);
+
+      const key = GD.hex(await GD.chunkKey(GD.unhex(dekHex), c.index, ordered.length));
+      const open = await GD.openChunk(fileId, blob, key,
+                                             { index: c.index, total: ordered.length });
+      parts.push(open.plain);
+      received += open.plain.length;
+      onBytes(received);
+    }
+
+    // Detects reordering, duplication and truncation across the whole file.
+    const chain = await GD.chainDigest(ordered.map((c) => c.sha256));
+    if (chain !== meta.chain) throw new Error('This file failed its integrity check');
+    if (received !== manifest.plain_size) throw new Error('This file failed its integrity check');
+
+    saveBlob(new Blob(parts), meta.name || 'download');
+    return meta.name;
+  }
+
   async function startDownload(btn) {
-    const sha256    = btn.dataset.sha;
+    const fileId    = btn.dataset.id;
     const filename  = btn.dataset.name;
     const mimeType  = btn.dataset.mime;
+    const isPrivate = btn.dataset.mode === 'private';
     const sizeBytes = Number(btn.dataset.size) || 0;
     const label     = btn.querySelector('span');
 
-    const row = document.querySelector(`tr.dl-prog-row[data-sha="${sha256}"]`);
+    const row = document.querySelector(`tr.dl-prog-row[data-id="${fileId}"]`);
     const bar = row?.querySelector('.dl-bar-fill');
 
-    // A file inside a collapsed folder would report progress off-screen.
     const fileRow = btn.closest('tr.folder-item');
     if (fileRow && !fileRow.classList.contains('is-open')) {
       const folderRow = fileRow.closest('table').querySelector('tr.folder-row');
@@ -1859,41 +2232,29 @@
       label.textContent = originalLabel;
       if (row) row.classList.remove('is-open');
     };
+    const onBytes = (n) => {
+      if (bar && sizeBytes > 0) bar.style.width = Math.min(100, Math.round(n / sizeBytes * 100)) + '%';
+    };
 
-    let res;
+    if (isPrivate) {
+      const ok = await withKeys(async () => {
+        if (bar) bar.style.width = '1%';
+        const name = await downloadPrivate(fileId, onBytes, (n) => { if (n) label.textContent = n; });
+        return name;
+      });
+      restore();
+      if (ok) toast(`${ok} decrypted in your browser`, 'ok');
+      return;
+    }
+
     try {
-      res = await fetch(`/download/${sha256}`);
+      await downloadPublic(fileId, filename, mimeType, onBytes);
+      restore();
+      toast(`${filename} saved`, 'ok');
     } catch (e) {
       restore();
-      return toast('Download failed: ' + e.message, 'err');
+      toast('Download failed: ' + e.message, 'err');
     }
-
-    if (!res.ok) {
-      restore();
-      return toast(`Download error ${res.status}`, 'err');
-    }
-
-    const reader = res.body.getReader();
-    const parts = [];
-    let received = 0;
-    while (true) {
-      let c;
-      try { c = await reader.read(); } catch { break; }
-      if (c.done) break;
-      parts.push(c.value);
-      received += c.value.length;
-      if (bar && sizeBytes > 0) {
-        bar.style.width = Math.min(100, Math.round(received / sizeBytes * 100)) + '%';
-      }
-    }
-
-    const blob = new Blob(parts, { type: mimeType });
-    const url  = URL.createObjectURL(blob);
-    Object.assign(document.createElement('a'), { href: url, download: filename }).click();
-    URL.revokeObjectURL(url);
-
-    restore();
-    toast(`${filename} saved`, 'ok');
   }
 
   /* Boot ------------------------------------------------------------------ */

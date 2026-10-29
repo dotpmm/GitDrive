@@ -1,0 +1,5 @@
+.env
+.venv
+tests/vectors.json
+__pycache__
+.git

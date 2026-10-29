@@ -65,13 +65,10 @@ class GitHubClient:
         }
         self._owner = os.getenv("GITHUB_OWNER")
         self._private = os.getenv("GITHUB_PRIVATE", "false").lower() == "true"
-        self._commit_name_mode = os.getenv("MASK_COMMITS", "false").lower()
 
     def _commit_message(self, path: str, filename: str | None = None, username: str | None = None) -> str:
         if username and filename:
             return f"{username} uploaded {filename}"
-        if self._commit_name_mode == "false" and filename:
-            return filename
         return path[11:19]
         #           ^^ the starting 8 chars were the same all the time cuz of 'object/ab' lmao
 

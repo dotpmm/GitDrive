@@ -209,6 +209,11 @@
       *, *::before, *::after { animation: none !important; transition: none !important; }
     }
   </style>
+<!-- Argon2id for the browser: the only part of the format Web Crypto does not provide. -->
+<script src="https://cdn.jsdelivr.net/npm/hash-wasm@4.12.0/dist/argon2.umd.min.js"
+        integrity="sha384-dcec617a2e1b700fa132d1583a186cb70611113395e869f2dd6cc82b415d3094"
+        crossorigin="anonymous" referrerpolicy="no-referrer" defer></script>
+<script src="/gitdrive-crypto.js" defer></script>
 </head>
 <body>
 
@@ -243,6 +248,8 @@
   <script type="application/json" id="share-data">__SHARE_DATA__</script>
   <script>
     const data = JSON.parse(document.getElementById('share-data').textContent);
+    const GD = window.GDCrypto;
+    let K_ROOT = null;   // derived from the password, then used and dropped
 
     const ICON_FILE = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
     const ICON_LOCK = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>';
@@ -278,42 +285,136 @@
       return nativeFetch(path, { ...init, headers });
     }
 
+    let ticket = null;
+    let manifest = null;
+
+    // A private share link authorises the ciphertext only. The password is the real key,
+    // which is why no GitDrive account is required here.
+    async function mintTicket() {
+      if (ticket) return ticket;
+      const res = await api(`/share/${data.token}/access`, { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || 'This file is not available right now.');
+      ticket = body.url ? body.url.replace('/share/d/', '') : null;
+      if (!ticket) throw new Error('Could not open this download link.');
+      return ticket;
+    }
+
+    async function fetchManifest() {
+      if (manifest) return manifest;
+      const t = await mintTicket();
+      const res = await api(`/files/${data.fileId}/manifest?t=${encodeURIComponent(t)}`);
+      if (!res.ok) throw new Error('This file is not available right now.');
+      manifest = await res.json();
+      return manifest;
+    }
+
+    async function decryptShared(grant) {
+      const m = await fetchManifest();
+      const { dekHex, meta } = await GD.openManifest(m, K_ROOT);
+      const ordered = [...meta.chunks].sort((a, b) => a.index - b.index);
+      const parts = [];
+      for (const c of ordered) {
+        const res = await api(`/files/${data.fileId}/chunk/${c.index}?t=${encodeURIComponent(grant)}`);
+        if (!res.ok) throw new Error(`Chunk ${c.index + 1} failed (${res.status})`);
+        const blob = new Uint8Array(await res.arrayBuffer());
+        const key = GD.hex(await GD.chunkKey(GD.unhex(dekHex), c.index, ordered.length));
+        const open = await GD.openChunk(data.fileId, blob, key,
+                                        { index: c.index, total: ordered.length });
+        parts.push(open.plain);
+      }
+      if (await GD.chainDigest(ordered.map((c) => c.sha256)) !== meta.chain) {
+        throw new Error('This file failed its integrity check.');
+      }
+      const url = URL.createObjectURL(new Blob(parts));
+      Object.assign(document.createElement('a'), { href: url, download: meta.name || 'download' }).click();
+      URL.revokeObjectURL(url);
+      return meta.name;
+    }
+
     async function startDownload(button) {
       clearError();
       const resting = button.innerHTML;
       button.disabled = true;
       button.textContent = 'Preparing your download…';
-      let navigating = false;
       try {
-        const res = await api(`/share/${data.token}/access`, { method: 'POST' });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          showError(body.detail || 'This file is not available right now.');
+        if (data.isEncrypted) {
+          button.textContent = 'Decrypting…';
+          const grant = await mintTicket();
+          const name = await decryptShared(grant);
+          button.textContent = 'Starting download…';
+          document.getElementById('fname').textContent = name || document.getElementById('fname').textContent;
           return;
         }
-        navigating = true;
-        window.location.href = body.url;
+        await mintTicket();
+        window.location.href = `/share/d/${ticket}`;
         button.textContent = 'Starting download…';
-      } catch {
-        showError('Could not reach GitDrive. Check your connection and try again.');
-      } finally {
-        if (!navigating) {
-          button.disabled = false;
-          button.innerHTML = resting;
-        }
+      } catch (err) {
+        showError(err instanceof GD.CryptoError
+          ? 'That password does not decrypt this file.'
+          : (err.message || 'Could not reach GitDrive. Check your connection and try again.'));
+        button.disabled = false;
+        button.innerHTML = resting;
       }
     }
 
     function renderReady() {
       view.innerHTML = `
-        <h2>${data.isPrivate ? 'Ready to download' : 'Ready when you are'}</h2>
-        <p class="lede">${data.isPrivate
-          ? `This file is private to its owner${data.username ? `, and you are signed in as ${esc(data.username)}` : ''}.`
-          : 'This file is public, so the link is all you need.'}</p>
-        <button class="swap" id="go" type="button">${ICON_DOWN}<span>Download</span></button>
-        <p class="note">Anyone with this link can reach this page, so send it only to the people you want to see the file.</p>
+        <h2>${data.isEncrypted ? 'Ready to decrypt' : 'Ready when you are'}</h2>
+        <p class="lede">${data.isEncrypted
+          ? 'This file was encrypted in its owner&rsquo;s browser. Enter their password to decrypt it here.'
+          : (data.isPrivate
+              ? `This file is private to its owner${data.username ? `, and you are signed in as ${esc(data.username)}` : ''}.`
+              : 'This file is public, so the link is all you need.')}</p>
+        <button class="swap" id="go" type="button">${ICON_DOWN}<span>${data.isEncrypted ? 'Decrypt' : 'Download'}</span></button>
+        <p class="note">${data.isEncrypted
+          ? 'Your password is used in this tab only. It is never sent to GitDrive, and it cannot be recovered by anyone.'
+          : 'Anyone with this link can reach this page, so send it only to the people you want to see the file.'}</p>
       `;
-      view.querySelector('#go').onclick = e => startDownload(e.currentTarget);
+      view.querySelector('#go').onclick = (e) => startDownload(e.currentTarget);
+    }
+
+    function renderUnlock() {
+      view.innerHTML = `
+        <h2>Enter the password</h2>
+        <p class="lede">This file is encrypted end to end. Decrypting happens here in your browser &mdash;
+           the password is never sent anywhere.</p>
+        <form id="unlock" novalidate>
+          <label><span class="label">Password</span>
+            <input id="pw" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit" id="go">Decrypt</button>
+        </form>
+        <p class="note">You also need this file&rsquo;s manifest, which travels with the share link.
+           Without the correct password the ciphertext cannot be read.</p>
+      `;
+      const form = view.querySelector('#unlock');
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        clearError();
+        const button = form.querySelector('#go');
+        button.disabled = true;
+        button.textContent = 'Deriving key…';
+        try {
+          await new Promise((r) => setTimeout(r, 16));
+          const m = await fetchManifest();
+          const root = await GD.deriveKRoot(form.pw.value, m.kdf);
+          await GD.openManifest(m, root);      // proves the password before anything else
+          K_ROOT = root;
+          form.pw.value = '';
+          renderReady();
+          await startDownload(view.querySelector('#go'));
+        } catch (err) {
+          showError(err instanceof GD.CryptoError
+            ? 'That password does not decrypt this file.'
+            : 'Could not reach GitDrive. Check your connection and try again.');
+          form.pw.value = '';
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Decrypt';
+        }
+      };
+      form.pw.focus();
     }
 
     function renderSignIn() {
@@ -370,14 +471,15 @@
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    document.getElementById('glyph').innerHTML = data.isPrivate ? ICON_LOCK : ICON_FILE;
-    document.getElementById('fname').textContent = data.filename;
+    document.getElementById('glyph').innerHTML = data.isEncrypted ? ICON_LOCK : (data.isPrivate ? ICON_LOCK : ICON_FILE);
+    document.getElementById('fname').textContent = data.filename || 'Encrypted file';
     document.getElementById('size').textContent  = fmtSize(data.size);
     document.getElementById('chunks').textContent = data.chunkCount + (data.chunkCount === 1 ? ' chunk' : ' chunks');
     document.title = data.filename + ' · GitDrive';
 
     if (data.expired) showError('That download link had expired, so a fresh one is ready below.');
-    data.authorized ? renderReady() : renderSignIn();
+    if (data.isEncrypted) renderUnlock();
+    else data.authorized ? renderReady() : renderSignIn();
   </script>
 </body>
 </html>

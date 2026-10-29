@@ -12,3 +12,8 @@ dependencies = [
     "pymongo>=4.10",
     "cryptography>=49.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]

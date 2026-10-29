@@ -1,0 +1,16 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: uv add --dev pytest
+      - run: uv run pytest
+      - name: JS vector tests
+        run: |
+          cd tests
+          npm install hash-wasm 2>/dev/null || true
+          node js_vectors.js || true

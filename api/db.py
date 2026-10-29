@@ -1,6 +1,5 @@
 import os
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient, DESCENDING, ReturnDocument
 
@@ -25,12 +24,14 @@ sessions = _db["sessions"]
 shares = _db["shares"]
 tickets = _db["tickets"]
 
-files.create_index([("sha256", 1)], unique=True, name="hash")
+repos.create_index([("name", 1)], unique=True, name="repo_name")
+files.create_index([("file_id", 1)], unique=True, name="file_id")
 files.create_index([("repo", 1)], name="repo_idx")
+files.create_index([("owner_id", 1)], name="owner_idx")
 users.create_index([("username", 1)], unique=True, name="username")
 sessions.create_index([("token", 1)], unique=True, name="session_token")
 shares.create_index([("token", 1)], unique=True, name="share_token")
-tickets.create_index([("expires_at", 1)], name="ticket_expiry")
+tickets.create_index([("expires_at", 1)], expireAfterSeconds=0, name="ticket_expiry_ttl")
 
 
 def _serialize(doc: dict) -> dict:
@@ -44,6 +45,8 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
+from pymongo.errors import DuplicateKeyError
+
 def get_active_repo() -> tuple[str, bool]:
     repo_doc = repos.find_one(sort=[("created_at", DESCENDING)])
     if repo_doc and repo_doc["total_bytes"] < REPO_SIZE_LIMIT:
@@ -51,24 +54,34 @@ def get_active_repo() -> tuple[str, bool]:
 
     count = repos.count_documents({})
     new_name = f"dotstore-{count + 1}"
-    repos.insert_one({
-        "name": new_name,
-        "total_bytes": 0,
-        "created_at": datetime.now(timezone.utc),
-    })
-    return new_name, True
+    try:
+        repos.insert_one({
+            "name": new_name,
+            "total_bytes": 0,
+            "created_at": datetime.now(timezone.utc),
+        })
+        return new_name, True
+    except DuplicateKeyError:
+        # race: someone else created it; re-read
+        existing = repos.find_one({"name": new_name})
+        if existing:
+            return existing["name"], False
+        # fallback
+        repo_doc = repos.find_one(sort=[("created_at", DESCENDING)])
+        return repo_doc["name"], False
 
 
 def increment_repo_size(repo: str, size_bytes: int) -> None:
     repos.update_one({"name": repo}, {"$inc": {"total_bytes": size_bytes}})
 
 
-def create_user(username: str, password_hash: str) -> dict:
-    """The encryption UUID is intentionally never returned by this module's public serializers."""
+def create_user(username: str, verifier_hash: str, kdf_salt: str) -> dict:
+    # No password, no password hash and no encryption key material is stored here. The
+    # browser derives K_root from the password and only ever sends a keyed verifier.
     doc = {
         "username": username,
-        "password_hash": password_hash,
-        "encryption_id": str(uuid.uuid4()),
+        "verifier_hash": verifier_hash,
+        "kdf_salt": kdf_salt,
         "created_at": datetime.now(timezone.utc),
     }
     users.insert_one(doc)
@@ -102,42 +115,42 @@ def _public_user(user: dict) -> dict:
     return {"id": str(user["_id"]), "username": user["username"]}
 
 
-def get_repo_stats() -> list[dict]:
-    cursor = repos.find({}).sort("created_at", 1)
-    return [_serialize(doc) for doc in cursor]
-
-
 def upsert_file(
     *,
-    sha256: str,
-    original_filename: str,
+    file_id: str,
+    mode: str,
     repo: str,
-    relative_path: str = "",
-    mime_type: str,
     size_bytes: int,
     is_chunked: bool = False,
     chunks: list[dict],
+    manifest: dict,
+    original_filename: str,
+    relative_path: str = "",
+    mime_type: str,
     owner: dict,
     visibility: str,
 ) -> dict:
     doc = {
-        "sha256": sha256,
-        "original_filename": original_filename,
-        "relative_path": relative_path,
+        "file_id": file_id,
+        "mode": mode,
         "repo": repo,
         "mime_type": mime_type,
         "size_bytes": size_bytes,
         "is_chunked": is_chunked,
         "chunk_count": len(chunks),
         "chunks": chunks,
+        "manifest": manifest,
+        # Blank for private files: the filename only exists inside the sealed manifest.
+        "original_filename": original_filename,
+        "relative_path": relative_path,
         "owner_id": str(owner["_id"]),
         "owner_username": owner["username"],
         "visibility": visibility,
-        "shared_with": [],
         "uploaded_at": datetime.now(timezone.utc),
+        "deleted_at": None,
     }
     result = files.find_one_and_update(
-        {"sha256": sha256},
+        {"file_id": file_id},
         {"$set": doc}, # this thing is crazy, it only updates the changes, instead of rewriting it!
         upsert=True,
         return_document=ReturnDocument.AFTER,
@@ -145,9 +158,27 @@ def upsert_file(
     return _serialize(result)
 
 
-def find_by_sha256(sha256: str) -> dict | None:
-    doc = files.find_one({"sha256": sha256})
+def find_by_file_id(file_id: str) -> dict | None:
+    doc = files.find_one({"file_id": file_id})
     return _serialize(doc) if doc else None
+
+
+def mark_deleted(file_id: str) -> None:
+    files.update_one({"file_id": file_id}, {"$set": {"deleted_at": datetime.now(timezone.utc)}})
+
+
+def restore_file(file_id: str) -> None:
+    files.update_one({"file_id": file_id}, {"$unset": {"deleted_at": ""}})
+
+
+def purge_file(file_id: str) -> dict | None:
+    doc = files.find_one_and_delete({"file_id": file_id})
+    return _serialize(doc) if doc else None
+
+
+def update_file(file_id: str, fields: dict) -> dict | None:
+    files.update_one({"file_id": file_id}, {"$set": fields})
+    return find_by_file_id(file_id)
 
 
 def list_visible_files(user: dict) -> list[dict]:
@@ -155,41 +186,70 @@ def list_visible_files(user: dict) -> list[dict]:
         "$or": [
             {"owner_id": str(user["_id"])},
             {"visibility": "public"},
-            {"shared_with": user["username"]},
         ]
     }).sort("uploaded_at", DESCENDING)
     return [_serialize(doc) for doc in cursor]
 
 
-def add_collaborator(sha256: str, username: str) -> dict | None:
-    doc = files.find_one_and_update(
-        {"sha256": sha256}, {"$addToSet": {"shared_with": username}},
-        return_document=ReturnDocument.AFTER,
-    )
-    return _serialize(doc) if doc else None
-
-
-def create_share(file_sha256: str, visibility: str) -> str:
+def create_share(file_id: str, visibility: str, expires_in_seconds: int | None = None) -> str:
     token = secrets.token_urlsafe(24)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=expires_in_seconds) if expires_in_seconds else None
     shares.insert_one({
         "token": token,
-        "file_sha256": file_sha256,
+        "file_id": file_id,
         "visibility": visibility,
-        "created_at": datetime.now(timezone.utc),
+        "created_at": now,
+        "expires_at": expires_at,
+        "revoked": False,
     })
     return token
+
+
+def list_shares(user: dict) -> list[dict]:
+    out = []
+    for s in shares.find({}):
+        rec = files.find_one({"file_id": s["file_id"]})
+        if not rec or str(rec.get("owner_id")) != str(user["_id"]):
+            continue
+        out.append({
+            "token": s["token"],
+            "file_id": s["file_id"],
+            "mode": s.get("visibility"),
+            "created_at": s["created_at"].isoformat() if isinstance(s.get("created_at"), datetime) else s.get("created_at"),
+            "expires_at": s["expires_at"].isoformat() if isinstance(s.get("expires_at"), datetime) else s.get("expires_at"),
+            "revoked": bool(s.get("revoked", False)),
+        })
+    return out
+
+
+def revoke_share(token: str) -> None:
+    shares.update_one({"token": token}, {"$set": {"revoked": True}})
 
 
 def find_share(token: str) -> dict | None:
     return shares.find_one({"token": token})
 
+
+def user_usage(user: dict) -> dict:
+    used = 0
+    count = 0
+    for f in files.find({"owner_id": str(user["_id"])}):
+        if f.get("deleted_at"):
+            continue
+        used += int(f.get("size_bytes", 0))
+        count += 1
+    quota = int(os.getenv("DEFAULT_USER_QUOTA_BYTES", str(5 * 1024 * 1024 * 1024)))
+    return {"used_bytes": used, "file_count": count, "quota_bytes": quota}
+
+
 # link ticketing system, so no more link copy and user binding issues
-def create_download_ticket(file_sha256: str, share_token: str) -> tuple[str, datetime]:
+def create_download_ticket(file_id: str, share_token: str) -> tuple[str, datetime]:
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=TICKET_TTL_SECONDS)
     tickets.insert_one({
         "token": token,
-        "file_sha256": file_sha256,
+        "file_id": file_id,
         "share_token": share_token,
         "expires_at": expires_at,
         "created_at": datetime.now(timezone.utc),
