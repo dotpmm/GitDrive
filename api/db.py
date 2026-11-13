@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timezone
 from pymongo import MongoClient, DESCENDING
+from pymongo.errors import DuplicateKeyError
 
 from dotenv import load_dotenv
 
@@ -18,6 +19,7 @@ repos = _db["repos"]
 
 files.create_index([("sha256", 1)], unique=True, name="hash")
 files.create_index([("repo", 1)], name="repo_idx")
+repos.create_index([("name", 1)], unique=True, name="repo_name")
 
 
 def _serialize(doc: dict) -> dict:
@@ -32,17 +34,23 @@ def _serialize(doc: dict) -> dict:
 
 
 def get_active_repo() -> tuple[str, bool]:
+    """Return (repo_name, is_new). Creates the next dotstore-N when the latest one is full."""
     repo_doc = repos.find_one(sort=[("created_at", DESCENDING)])
     if repo_doc and repo_doc["total_bytes"] < REPO_SIZE_LIMIT:
         return repo_doc["name"], False
 
     count = repos.count_documents({})
     new_name = f"dotstore-{count + 1}"
-    repos.insert_one({
-        "name": new_name,
-        "total_bytes": 0,
-        "created_at": datetime.now(timezone.utc),
-    })
+    try:
+        repos.insert_one({
+            "name": new_name,
+            "total_bytes": 0,
+            "created_at": datetime.now(timezone.utc),
+        })
+    except DuplicateKeyError:
+        # another request created it first (unique index on name), just use the newest one
+        repo_doc = repos.find_one(sort=[("created_at", DESCENDING)])
+        return repo_doc["name"], False
     return new_name, True
 
 

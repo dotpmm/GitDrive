@@ -34,6 +34,7 @@ All raw payloads are encrypted using AES-256 in Galois/Counter Mode (GCM) with a
 | `POST` | `/upload` | Accepts multipart chunk form uploads. |
 | `GET` | `/upload/status/{upload_id}` | Retrieves the sync percentage of the queue workers uploading to GitHub. | 
 | `GET` | `/download/{file_sha256}` | Fetches raw/encrypted blobs from GitHub, decrypts them on-the-fly, and streams the payload back as a direct download. |
+| `GET` | `/health` | Liveness check (no auth). |
 | `GET` | `/files` | Lists all documents inside the MongoDB files collection, sorted by upload time. |
 
 ## Self-Hosting Guide
@@ -46,8 +47,11 @@ All raw payloads are encrypted using AES-256 in Galois/Counter Mode (GCM) with a
 | `GITHUB_TOKEN` | GitHub Personal Access Token (Classic) with full `repo` scope | `ghp_...` |
 | `GITHUB_OWNER` | GitHub username that owns the target repos | `your-username` |
 | `GITHUB_PRIVATE` | Whether newly created GitHub repos should be private | `false/true` |
-| `MASK_COMMITS` | Commit message mode for GitHub uploads: `path8` uses the first 8 chars of the object path, `filename` uses the uploaded file name | `true (to mask) / false` |
-| `LOG_MODE` | Application logging verbosity (`prod` or `debug`) | `prod` |
+| `MASK_COMMITS` | `true` = commit messages are 8 chars of the object path (masked); anything else = the uploaded file name | `true (to mask) / false` |
+| `LOG_MODE` | Application logging verbosity (`prod` or `debug`) | `prod` (default) |
+| `ENCRYPTION_KEY` | *(recommended)* Secret used to derive the AES key. If unset, the GitHub token is used (old behaviour). Files encrypted with the token-derived key still decrypt after you set this, so rotating the token is safe. | any long random string |
+| `API_KEY` | *(recommended)* If set, every API call must send it as the `X-API-Key` header. | any long random string |
+| `CORS_ORIGINS` | Comma separated browser origins allowed to call the API (e.g. your Vercel app). | `*` (default) |
 
 2.  I recommend using [uv](https://github.com/astral-sh/uv), as it's insanely faster than pip, then:
 ```bash
