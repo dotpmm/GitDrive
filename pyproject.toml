@@ -1,7 +1,7 @@
 [project]
 name = "GitDrive"
-version = "3.5.0"
-description = "GitDrive"
+version = "4.0.0"
+description = "GitDrive - encrypted cloud storage on GitHub"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
@@ -10,5 +10,10 @@ dependencies = [
     "python-multipart>=0.0.12",
     "python-dotenv>=1.0",
     "pymongo>=4.10",
-    "cryptography>=49.0.0",
+    "cryptography>=45.0.0",
+    "pyjwt>=2.9",
+    "stream-zip>=0.0.83",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8", "mongomock>=4.3"]

@@ -1,105 +1,88 @@
-import os
+"""MongoDB access + small shared helpers."""
 from datetime import datetime, timezone
-from pymongo import MongoClient, DESCENDING
+
+from bson import ObjectId
+from bson.errors import InvalidId
+from pymongo import DESCENDING, MongoClient
 from pymongo.errors import DuplicateKeyError
 
-from dotenv import load_dotenv
+from . import config
 
-load_dotenv()
+_client = MongoClient(config.MONGODB_URI)
+_db = _client[config.DATABASE_NAME]
 
-REPO_SIZE_LIMIT = 5 * 1024 * 1024 * 1024
-# im still not sure abt this, they say
-# u get a soft warning once hit the 5GB mark
-# lets cap it at 5Gb for now
-
-_client = MongoClient(os.getenv("MONGODB_URI"))
-_db = _client[os.getenv("DATABASE_NAME")]
-files = _db["files"]
+users = _db["users"]
+spaces = _db["spaces"]
+nodes = _db["nodes"]
+blobs = _db["blobs"]
+shares = _db["shares"]
+invites = _db["invites"]
 repos = _db["repos"]
+resets = _db["resets"]
 
-files.create_index([("sha256", 1)], unique=True, name="hash")
-files.create_index([("repo", 1)], name="repo_idx")
-repos.create_index([("name", 1)], unique=True, name="repo_name")
+users.create_index("username", unique=True)
+users.create_index("email", unique=True)
+spaces.create_index("owner")
+spaces.create_index("members.username")
+nodes.create_index([("space", 1), ("parent", 1), ("trashed_at", 1)])
+nodes.create_index("owner")
+nodes.create_index("starred_by")
+shares.create_index("token", unique=True)
+shares.create_index("node")
+invites.create_index([("to", 1), ("status", 1)])
+invites.create_index([("space", 1), ("status", 1)])
+resets.create_index("token_hash", unique=True)
+resets.create_index("expires_at", expireAfterSeconds=0)
+repos.create_index("name", unique=True)
+
+PUBLIC_SPACE_ID = "public"
 
 
-def _serialize(doc: dict) -> dict:
-    # mongo wants to hide the id field, so it uses the '_' before it, but i wanna access it through the api
-    # thus converted to string
-    doc["id"] = str(doc.pop("_id"))
-    # raw py datetime objects are not JSON-friendly, so converting them to strings
-    for key, val in list(doc.items()):
-        if isinstance(val, datetime):
-            doc[key] = val.isoformat()
-    return doc
+def now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def get_active_repo() -> tuple[str, bool]:
-    """Return (repo_name, is_new). Creates the next dotstore-N when the latest one is full."""
-    repo_doc = repos.find_one(sort=[("created_at", DESCENDING)])
-    if repo_doc and repo_doc["total_bytes"] < REPO_SIZE_LIMIT:
-        return repo_doc["name"], False
-
-    count = repos.count_documents({})
-    new_name = f"dotstore-{count + 1}"
+def oid(value: str | None) -> ObjectId | None:
     try:
-        repos.insert_one({
-            "name": new_name,
-            "total_bytes": 0,
-            "created_at": datetime.now(timezone.utc),
-        })
-    except DuplicateKeyError:
-        # another request created it first (unique index on name), just use the newest one
-        repo_doc = repos.find_one(sort=[("created_at", DESCENDING)])
-        return repo_doc["name"], False
-    return new_name, True
+        return ObjectId(value) if value else None
+    except (InvalidId, TypeError):
+        return None
 
 
-def increment_repo_size(repo: str, size_bytes: int) -> None:
-    repos.update_one({"name": repo}, {"$inc": {"total_bytes": size_bytes}})
+def iso(v):
+    if isinstance(v, datetime):
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        return v.isoformat()
+    return v
 
 
-def get_repo_stats() -> list[dict]:
-    cursor = repos.find({}).sort("created_at", 1)
-    return [_serialize(doc) for doc in cursor]
-
-
-def upsert_file(
-    *,
-    sha256: str,
-    original_filename: str,
-    repo: str,
-    relative_path: str = "",
-    mime_type: str,
-    size_bytes: int,
-    is_chunked: bool = False,
-    chunks: list[dict],
-) -> dict:
-    doc = {
-        "sha256": sha256,
-        "original_filename": original_filename,
-        "relative_path": relative_path,
-        "repo": repo,
-        "mime_type": mime_type,
-        "size_bytes": size_bytes,
-        "is_chunked": is_chunked,
-        "chunk_count": len(chunks),
-        "chunks": chunks,
-        "uploaded_at": datetime.now(timezone.utc),
-    }
-    result = files.find_one_and_update(
-        {"sha256": sha256},
-        {"$set": doc}, # this thing is crazy, it only updates the changes, instead of rewriting it!
+def ensure_public_space() -> None:
+    spaces.update_one(
+        {"_id": PUBLIC_SPACE_ID},
+        {"$setOnInsert": {"name": "Public", "type": "public", "owner": None, "members": [], "created_at": now()}},
         upsert=True,
-        return_document=True,
     )
-    return _serialize(result)
 
 
-def find_by_sha256(sha256: str) -> dict | None:
-    doc = files.find_one({"sha256": sha256})
-    return _serialize(doc) if doc else None
+def private_space_id(username: str) -> str:
+    return f"private:{username}"
 
 
-def list_all_files() -> list[dict]:
-    cursor = files.find({}).sort("uploaded_at", DESCENDING)
-    return [_serialize(doc) for doc in cursor]
+# ----------------------------------------------------------------- repo choice
+def get_active_repo() -> tuple[str, bool]:
+    """(repo_name, is_new). A new dotstore-N is started when the newest one is full."""
+    doc = repos.find_one(sort=[("created_at", DESCENDING)])
+    if doc and doc["total_bytes"] < config.REPO_SIZE_LIMIT:
+        return doc["name"], False
+    name = f"dotstore-{repos.count_documents({}) + 1}"
+    try:
+        repos.insert_one({"name": name, "total_bytes": 0, "created_at": now()})
+    except DuplicateKeyError:
+        doc = repos.find_one(sort=[("created_at", DESCENDING)])
+        return doc["name"], False
+    return name, True
+
+
+def add_repo_bytes(repo: str, delta: int) -> None:
+    repos.update_one({"name": repo}, {"$inc": {"total_bytes": delta}})

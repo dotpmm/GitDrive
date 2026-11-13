@@ -11,4 +11,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 10000
 
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "10000", "--proxy-headers", "--forwarded-allow-ips=*"]
