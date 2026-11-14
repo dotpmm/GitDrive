@@ -1,67 +1,48 @@
 # GitDrive
 
-A high-performance ( ¯\\_(ツ)_/¯ , I mean it's fast), **cost-free** block (since GitHub doesn't allow you to upload files bigger than 25MB without warnings, we chunk them) **cloud storage system** utilizing FastAPI, MongoDB, and GitHub repositories as an **INFINITE** (lmao, I hope) backend storage provider. This project features chunk-based uploads, client-side parallel streaming downloads, and transparent AES-256-GCM encryption.
+A free, encrypted, Google-Drive-style cloud storage that keeps your files in GitHub repositories.
 
-## Deployment Links
+- **Accounts** with username + password (+ email for resets)
+- **Spaces**: a *Private* drive per user, one *Public* space everybody can see, and any number of *Shared* spaces where you invite people by username
+- **Folders, trash, starring, search, rename/move**, folder uploads, **zip download** of folders and **unzip** on the server
+- **Share links** with a direct URL (`/s/<token>/<file>`) that streams with HTTP Range, so videos play and embed in Discord / Slack / Telegram without downloading
+- **Fast transfers**: parallel chunk uploads, one git commit per file, parallel prefetched downloads over a pooled connection, reads from GitHub's CDN
+- **Encryption**: every file has its own random AES-256-GCM key, wrapped with a master key (`ENCRYPTION_KEY`) stored in MongoDB. Chunks are bound to their file and position. Deleting a file destroys its key (cryptographic erase)
+- **Admin panel**: users, storage per user, spaces, repositories
 
-| Resource | Target URL |
-| :--- | :--- |
-| **Production API Endpoint** | `---` |
-| **Frontend Web Interface** | `---` |
-
-## Architectural Highlights
-
-### 1. Producer-Consumer Pipeline (SOTA)
-To prevent OOM on resource-constrained virtual machines (e.g., 2 GB RAM instances, or Render's stateless containers), the server employs a producer-consumer upload pipeline. Chunks uploaded by the browser are **immediately written to disk-backed temporary files** and placed into a **queue**. A pool of five worker coroutines drains the queue to upload chunks to GitHub in parallel. This guarantees that the RAM usage remains static at approximately 50 MB regardless of concurrent users or file sizes.
-
-> This approach is better than the previous pipeline as this is a non-blocking system which allows the browser to upload at its maximum speed and, thanks to workers, now the uploads are 5x faster!
-
-### 2. Folder Traversal & Browser Zipping 
-When you drag and drop a folder, GitDrive traverses it recursively and appends the relative file path to the record's path metadata, mimicking real directory hierarchies just like Google Drive
-
-> This approach downloads the files sequentially to the client's browser, decrypts them on-the-fly, and uses `JSZip` to compile the folder into a `.zip` archive entirely on the client's machine. Zero server overhead, and scalable
-
-### 3. AES-256-GCM Encryption (Not reallu SOTA :P)
-All raw payloads are encrypted using AES-256 in Galois/Counter Mode (GCM) with a cryptographically secure random 12-byte nonce prepended to each chunk. This ensures that no one other than the server can decrypt the files, making this a highly secure storage solution.
-
-> P.S. Do we need a stronger encryption? Not necessarily, because first of all the files are stored as chunks and since you don't know the order of the chunks you cannot reassemble them by yourself, so it's already hard. This encryption does its job well (this enc ain't a joke gng).
-
-## API Endpoints Reference
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/` | Returns the core single-page HTML frontend. |
-| `POST` | `/upload` | Accepts multipart chunk form uploads. |
-| `GET` | `/upload/status/{upload_id}` | Retrieves the sync percentage of the queue workers uploading to GitHub. | 
-| `GET` | `/download/{file_sha256}` | Fetches raw/encrypted blobs from GitHub, decrypts them on-the-fly, and streams the payload back as a direct download. |
-| `GET` | `/files` | Lists all documents inside the MongoDB files collection, sorted by upload time. |
-
-## Self-Hosting Guide
-1. Create a `.env` file in the root directory to store these values:
-
-| Variable | Description | Default / Example |
-| :--- | :--- | :--- |
-| `MONGODB_URI` | MongoDB connection URI string | `mongodb+srv://` |
-| `DATABASE_NAME` | Name of the MongoDB database | `gitdrive_db` |
-| `GITHUB_TOKEN` | GitHub Personal Access Token (Classic) with full `repo` scope | `ghp_...` |
-| `GITHUB_OWNER` | GitHub username that owns the target repos | `your-username` |
-| `GITHUB_PRIVATE` | Whether newly created GitHub repos should be private | `false/true` |
-| `MASK_COMMITS` | Commit message mode for GitHub uploads: `path8` uses the first 8 chars of the object path, `filename` uses the uploaded file name | `true (to mask) / false` |
-| `LOG_MODE` | Application logging verbosity (`prod` or `debug`) | `prod` |
-
-2.  I recommend using [uv](https://github.com/astral-sh/uv), as it's insanely faster than pip, then:
-```bash
-    uv sync
-    uv run uvicorn api.main:app --host 0.0.0.0 --port 10000
 ```
----
+frontend/   React + TypeScript (Material 3 Expressive), deploy on Vercel
+api/        FastAPI backend, deploy on Render (Dockerfile included)
+tests/      end-to-end API tests (mongomock + fake GitHub)
+```
 
-### UI Features (as of now) :
+## Self-hosting the API
 
-- Stuff like `sharable links` and many more are a part of UI, which will be  documented soon!
+1. Copy `.env.example` to `.env` and fill it in. Generate secrets with `python -c "import secrets;print(secrets.token_urlsafe(48))"`.
+2. `uv sync && uv run uvicorn api.main:app --port 10000`
+3. On Render: create a *Web Service* from this repo (Docker), add the same variables.
 
-### Upcoming Features :
-- user management
-- delete feature (lmao, mb, it not implemented for now)
-- maybe some enhanced features like better logging and setup experience
-- many more , but after frontend launch
+Free-tier notes: Render's free instances sleep after ~15 min idle (first request is slow - ping `/health` with a free uptime monitor), have 512 MB RAM and no persistent disk (nothing here needs one). Chunks are 10 MB and at most 4 are processed at once to stay inside that memory.
+
+## API overview
+
+| Area | Endpoints |
+| :-- | :-- |
+| Auth | `POST /api/auth/signup`, `/login`, `/forgot`, `/reset`, `GET /api/me`, `POST /api/me/password` |
+| Spaces | `GET/POST /api/spaces`, `PATCH/DELETE /api/spaces/{id}`, members, `POST /api/spaces/{id}/invites`, `GET /api/invites`, `POST /api/invites/{id}/accept\|decline` |
+| Files | `GET /api/spaces/{id}/nodes`, folders, `PATCH /api/nodes/{id}`, trash/restore/delete, `/api/recent`, `/api/starred`, `/api/search` |
+| Upload | `POST /api/uploads` -> `PUT /api/uploads/{id}/chunks/{i}` (any order, parallel) -> `POST /api/uploads/{id}/complete` |
+| Download | `POST /api/nodes/{id}/url` -> `GET /d/{id}?...` (Range supported), `POST /api/zip-url` |
+| Sharing | `POST/DELETE /api/nodes/{id}/share`, public: `GET /s/{token}[/{name}]`, `GET /api/shared/{token}` |
+| Zip | `POST /api/nodes/{id}/extract`, `GET /api/jobs/{id}` |
+| Admin | `/api/admin/overview`, `/users`, `/spaces`, per-user disable / quota / reset link / delete |
+
+## Tests
+
+```
+uv run pytest
+```
+
+## Honest limits
+
+GitHub's terms are not meant for bulk file hosting; keep this for personal / friends use. Git history keeps old ciphertext forever, but deleted files are unreadable because their keys are destroyed. Back up `ENCRYPTION_KEY` - without it nothing can be decrypted.
